@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VOICEVOX Reader</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <h1>VOICEVOX Reader</h1>
+    
+    <div class="status-bar">
+      <span id="status">停止中</span>
+      <button id="toggleFloatingBtn" class="btn-toggle" title="常時表示パネルの切り替え">
+        <svg viewBox="0 0 24 24" width="16" height="16">
+          <path fill="currentColor" d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V5h14v14z"/>
+        </svg>
+      </button>
+    </div>
+
+    <div class="controls">
+      <button id="playBtn" class="btn btn-play" title="再生">
+        <svg viewBox="0 0 24 24" width="24" height="24">
+          <path fill="currentColor" d="M8 5v14l11-7z"/>
+        </svg>
+      </button>
+      <button id="pauseBtn" class="btn btn-pause" title="一時停止" style="display: none;">
+        <svg viewBox="0 0 24 24" width="24" height="24">
+          <path fill="currentColor" d="M6 4h4v16H6zm8 0h4v16h-4z"/>
+        </svg>
+      </button>
+      <button id="stopBtn" class="btn btn-stop" title="停止">
+        <svg viewBox="0 0 24 24" width="24" height="24">
+          <rect fill="currentColor" x="6" y="6" width="12" height="12"/>
+        </svg>
+      </button>
+    </div>
+
+    <div class="skip-controls">
+      <button id="prevBtn" class="btn-skip" title="前の文章" disabled>
+        <svg viewBox="0 0 24 24" width="20" height="20">
+          <path fill="currentColor" d="M15.41 16.59L10.83 12l4.58-4.59L14 6l-6 6 6 6z"/>
+        </svg>
+        前へ
+      </button>
+      <button id="nextBtn" class="btn-skip" title="次の文章" disabled>
+        次へ
+        <svg viewBox="0 0 24 24" width="20" height="20">
+          <path fill="currentColor" d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6z"/>
+        </svg>
+      </button>
+    </div>
+
+    <div class="settings">
+      <div class="setting-group">
+        <label for="speakerSelect">読み上げモデル:</label>
+        <select id="speakerSelect">
+          <option value="">読み込み中...</option>
+        </select>
+      </div>
+
+      <div class="setting-group">
+        <label for="speedRange">再生速度: <span id="speedValue">1.0</span>x</label>
+        <input type="range" id="speedRange" min="0.5" max="2.0" step="0.1" value="1.0">
+      </div>
+
+      <div class="setting-group">
+        <label for="volumeRange">音量: <span id="volumeValue">100</span>%</label>
+        <input type="range" id="volumeRange" min="0" max="100" step="5" value="100">
+      </div>
+    </div>
+
+    <div id="errorMessage" class="error-message" style="display: none;"></div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+{
+  "name": "voicevox-reader",
+  "version": "1.0.0",
+  "description": "VOICEVOXを使用してWebページの本文を読み上げるChrome拡張機能",
+  "private": true,
+  "scripts": {
+    "test": "node tests/run-content-tests.js"
+  },
+  "devDependencies": {
+    "jsdom": "^25.0.1"
+  }
+}

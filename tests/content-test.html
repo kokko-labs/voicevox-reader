@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>VOICEVOX Reader Content Tests</title>
+  <link rel="stylesheet" href="../src/content/content.css">
+</head>
+<body>
+  <main id="fixture"></main>
+  <pre id="result">running</pre>
+
+  <script>
+    window.__VOICEVOX_READER_ENABLE_TEST_HOOKS__ = true;
+    window.alert = (message) => {
+      throw new Error(`Unexpected alert: ${message}`);
+    };
+    window.confirm = () => true;
+    window.__statusMessages = [];
+    window.chrome = {
+      runtime: {
+        onMessage: { addListener() {} },
+        sendMessage(message) {
+          if (message.action === 'checkVoicevoxStatus') {
+            return Promise.resolve({ success: true, available: true });
+          }
+          if (message.action === 'statusUpdate') {
+            window.__statusMessages.push({
+              currentIndex: message.currentIndex,
+              totalSentences: message.totalSentences,
+              isPlaying: message.isPlaying,
+              isPaused: message.isPaused
+            });
+            return Promise.resolve({ success: true });
+          }
+          if (message.action === 'updateIcon') {
+            return Promise.resolve({ success: true });
+          }
+          return Promise.resolve({ success: true });
+        }
+      },
+      storage: {
+        local: {
+          get(keys, callback) {
+            const value = { floatingPanelEnabled: false };
+            if (typeof callback === 'function') {
+              callback(value);
+            }
+            return Promise.resolve(value);
+          }
+        }
+      }
+    };
+  </script>
+  <script src="../src/content/content.js"></script>
+  <script>
+    const tests = [];
+    const api = window.__VOICEVOX_READER_TESTS__;
+    const result = document.getElementById('result');
+    const fixture = document.getElementById('fixture');
+
+    function test(name, fn) {
+      tests.push({ name, fn });
+    }
+
+    function assert(condition, message) {
+      if (!condition) {
+        throw new Error(message);
+      }
+    }
+
+    function setFixture(html) {
+      api.stopReading();
+      fixture.innerHTML = html;
+    }
+
+    function compact(text) {
+      return text.replace(/\s+/g, '');
+    }
+
+    test('HTML解析で本文を優先し、ナビゲーションを除外する', () => {
+      setFixture(`
+        <nav>ホーム メニュー 読まない</nav>
+        <article>
+          <h1>テスト記事</h1>
+          <p>これは本文の一段落目です。重要な説明があります。</p>
+          <p>これは本文の二段落目です。読み上げ対象です。</p>
+        </article>
+        <aside>広告と関連記事</aside>
+      `);
+
+      const text = api.extractMainContent();
+      assert(text.includes('これは本文の一段落目です。'), '本文の一段落目が抽出されていません');
+      assert(text.includes('これは本文の二段落目です。'), '本文の二段落目が抽出されていません');
+      assert(!text.includes('ホーム メニュー'), 'ナビゲーションが混入しています');
+      assert(!text.includes('広告と関連記事'), 'aside が混入しています');
+    });
+
+    test('文章分割で句点なしの末尾と長文チャンクを扱う', () => {
+      const sentences = api.splitIntoSentences('一文目です。二文目です! 最後は句点なし');
+      assert(sentences.length === 3, `文章数が期待と違います: ${sentences.length}`);
+      assert(sentences[2] === '最後は句点なし', '句点なし末尾が保持されていません');
+
+      const longSentences = api.splitIntoSentences('あ'.repeat(305));
+      assert(longSentences.length === 4, '長文が100文字単位に分割されていません');
+    });
+
+    test('複数ノードにまたがる文章をハイライトできる', () => {
+      setFixture('<article><p>これは<strong>複数ノード</strong>にまたがる文章です。</p></article>');
+      api.highlightSentence('これは複数ノードにまたがる文章です。');
+      const highlight = document.getElementById('voicevox-reader-current');
+      assert(highlight, 'ハイライト要素が作成されていません');
+      assert(compact(highlight.textContent).includes('これは複数ノードにまたがる文章です'), 'ハイライト範囲が期待と違います');
+      api.removeHighlight();
+      assert(!document.getElementById('voicevox-reader-current'), 'ハイライトが削除されていません');
+    });
+
+    test('ハイライト解除後もリンクなどの内部マークアップを保持する', () => {
+      setFixture('<article><p>詳しくは<a href="https://example.com" id="vr-link">こちらのリンク</a>を参照してください。</p></article>');
+      api.highlightSentence('詳しくはこちらのリンクを参照してください。');
+      assert(document.getElementById('voicevox-reader-current'), 'ハイライト要素が作成されていません');
+
+      api.removeHighlight();
+      const link = document.getElementById('vr-link');
+      assert(link, 'ハイライト解除後にリンク要素が失われています');
+      assert(link.tagName === 'A' && link.getAttribute('href') === 'https://example.com', 'リンクの属性が保持されていません');
+      assert(compact(fixture.textContent).includes('詳しくはこちらのリンクを参照してください'), '本文テキストが壊れています');
+      assert(!document.getElementById('voicevox-reader-current'), 'ハイライトが削除されていません');
+    });
+
+    test('ページ読み上げフローがモック音声で最後まで進む', async () => {
+      setFixture(`
+        <article>
+          <p>最初の文です。次の文です。</p>
+          <p>最後の文です。</p>
+        </article>
+      `);
+
+      const spoken = [];
+      window.__statusMessages = [];
+      api.setSynthesizeSpeechOverride(async (text) => {
+        spoken.push(text);
+        return new ArrayBuffer(8);
+      });
+      api.setPlayAudioOverride(async () => 'ended');
+
+      await api.startReading();
+      const state = api.getState();
+      assert(!state.isPlaying && !state.isPaused, '読み上げ完了後に停止状態になっていません');
+      assert(spoken.length === 3, `読み上げ文数が期待と違います: ${spoken.length}`);
+      assert(spoken[0] === '最初の文です。', '最初の文が読み上げられていません');
+      assert(window.__statusMessages.some(message => message.currentIndex === 1 && message.totalSentences === 3), '2文目のインデックス通知がありません');
+      assert(window.__statusMessages.some(message => message.currentIndex === 2 && message.totalSentences === 3), '3文目のインデックス通知がありません');
+    });
+
+    (async () => {
+      const lines = [];
+      for (const item of tests) {
+        try {
+          await item.fn();
+          lines.push(`PASS ${item.name}`);
+        } catch (error) {
+          lines.push(`FAIL ${item.name}: ${error.message}`);
+        }
+      }
+
+      const failed = lines.some(line => line.startsWith('FAIL'));
+      result.textContent = `${failed ? 'FAIL' : 'PASS'}\n${lines.join('\n')}`;
+      document.documentElement.dataset.testStatus = failed ? 'fail' : 'pass';
+    })();
+  </script>
+</body>
+</html>

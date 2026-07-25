@@ -1,0 +1,5 @@
+# npm が自動生成する依存ライブラリ（package.json から復元できるため管理しない）
+node_modules/
+
+# Claude Code のマシンごとの権限設定（環境依存のため共有しない）
+.claude/settings.local.json
