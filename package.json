@@ -3,8 +3,11 @@
   "version": "1.0.0",
   "description": "VOICEVOXを使用してWebページの本文を読み上げるChrome拡張機能",
   "private": true,
+  "license": "MIT",
   "scripts": {
-    "test": "node tests/run-content-tests.js"
+    "test": "node tests/run-content-tests.js",
+    "build": "node scripts/build.js",
+    "package": "node scripts/build.js --zip"
   },
   "devDependencies": {
     "jsdom": "^25.0.1"

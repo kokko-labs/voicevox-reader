@@ -61,8 +61,8 @@ voicevox-reader/
 │       ├── popup.js
 │       └── popup.css
 ├── icons/                 # 拡張機能アイコン
-├── tests/                 # jsdomベースの自動テスト
-└── tasks/                 # 作業計画・レビュー記録・学びの蓄積
+├── scripts/build.js       # 配布用 dist/ を作るビルドスクリプト
+└── tests/                 # jsdomベースの自動テスト
 ```
 
 ## テスト
@@ -73,6 +73,20 @@ HTML解析、文章分割、ハイライト、読み上げフローは以下で�
 npm install
 npm test
 ```
+
+## ビルド（配布用）
+
+開発中は、このフォルダをそのまま「パッケージ化されていない拡張機能」として読み込めます。
+配布するときは、必要なファイルだけを `dist/` へ集めます。
+
+```bash
+npm run build     # dist/ を作る
+npm run package   # dist/ を作り、ウェブストア用の zip まで作る
+```
+
+`node_modules/` や `tests/` は配布物に含まれません。
+ビルド時に、`manifest.json` が参照するパスと、動的に注入するファイルが
+すべて揃っているかを確認します。欠けていればビルドが失敗します。
 
 ## 設定
 
@@ -114,4 +128,8 @@ npm test
 
 ## ライセンス
 
-MIT License
+MIT License（[LICENSE](LICENSE) を参照）
+
+この拡張機能は VOICEVOX を利用しますが、VOICEVOX 本体および各音声ライブラリは
+本リポジトリには含まれておらず、それぞれの利用規約が別途適用されます。
+利用にあたっては [VOICEVOX 公式サイト](https://voicevox.hiroshiba.jp/) の規約を確認してください。

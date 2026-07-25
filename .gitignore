@@ -3,3 +3,10 @@ node_modules/
 
 # Claude Code のマシンごとの権限設定（環境依存のため共有しない）
 .claude/settings.local.json
+
+# ビルド成果物（npm run build / npm run package で再生成できる）
+dist/
+*.zip
+
+# 作業メモ（手元にのみ置く）
+tasks/
