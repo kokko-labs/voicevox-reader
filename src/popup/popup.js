@@ -23,6 +23,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   await updateFloatingButtonState();
 });
 
+// スピーカー一覧を取得できているか（VOICEVOX 起動後の読み直し要否の判定に使う）
+let speakersLoaded = false;
+
 // スピーカー一覧を取得
 async function loadSpeakers() {
   try {
@@ -41,8 +44,10 @@ async function loadSpeakers() {
       });
     });
     
+    speakersLoaded = true;
     hideError();
   } catch (error) {
+    speakersLoaded = false;
     showError('VOICEVOXに接続できません。VOICEVOXが起動しているか確認してください。');
     speakerSelect.innerHTML = '<option value="">接続エラー</option>';
   }
@@ -79,7 +84,8 @@ async function saveSettings() {
 // ステータスを更新
 async function updateStatus() {
   try {
-    const response = await sendToActiveTab({ action: 'getStatus' });
+    // 状態を見るだけなので注入はしない。ポップアップを開いただけのタブに常駐させないため。
+    const response = await sendToActiveTab({ action: 'getStatus' }, { injectIfMissing: false });
     updateUIState(response);
   } catch (error) {
     updateUIState({ isPlaying: false, isPaused: false });
@@ -120,13 +126,15 @@ function updateUIState(status) {
 
 // 再生ボタン
 playBtn.addEventListener('click', async () => {
-  await saveSettings();
-
+  // 設定の保存は起動確認のあとに行う。
+  // VOICEVOX 未起動だと話者一覧が空のため、先に保存すると選択済みの話者IDを空で上書きしてしまう。
   const voicevoxReady = await ensureVoicevoxReady();
   if (!voicevoxReady) {
     return;
   }
-  
+
+  await saveSettings();
+
   try {
     await sendToActiveTab({
       action: 'play',
@@ -144,29 +152,25 @@ playBtn.addEventListener('click', async () => {
 
 async function ensureVoicevoxReady() {
   const status = await checkVoicevoxStatus();
-  if (status.available) {
-    hideError();
-    return true;
-  }
-
-  const shouldRetry = confirm('VOICEVOXが起動していません。VOICEVOXを起動してから OK を押すと再確認します。\n\nキャンセルすると読み上げを中止します。');
-  if (!shouldRetry) {
-    showError('VOICEVOXが起動していないため、読み上げを中止しました。');
+  if (!status.available) {
+    // 再確認ダイアログは設けない。起動後にもう一度再生を押せば同じ経路を通るため。
+    showError('VOICEVOXが起動していません。起動してから、もう一度再生してください。');
     return false;
   }
 
-  const retryStatus = await checkVoicevoxStatus();
-  if (retryStatus.available) {
+  // VOICEVOX の起動前にポップアップを開いていた場合、話者一覧が「接続エラー」のままなので読み直す
+  if (!speakersLoaded) {
     await loadSpeakers();
-    hideError();
-    return true;
+    await loadSettings();
   }
 
-  showError('VOICEVOXに接続できません。VOICEVOXを起動してから再度実行してください。');
-  return false;
+  hideError();
+  return true;
 }
 
-async function sendToActiveTab(message) {
+// content script は manifest で常時注入せず、操作された時点でこの関数から注入する。
+// injectIfMissing を false にすると注入を伴わない問い合わせになる（状態取得など）。
+async function sendToActiveTab(message, { injectIfMissing = true } = {}) {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab || !tab.id) {
     throw new Error('アクティブなタブが見つかりません。');
@@ -175,8 +179,11 @@ async function sendToActiveTab(message) {
   try {
     return await chrome.tabs.sendMessage(tab.id, message);
   } catch (error) {
-    // content script が未注入のタブ（拡張の更新・再読み込み前から開いていたタブ等）では
-    // 通信に失敗するため、動的に注入してから一度だけ再試行する
+    if (!injectIfMissing) {
+      throw error;
+    }
+
+    // 未注入のタブでは通信に失敗するため、注入してから一度だけ再試行する
     await injectContentScript(tab.id);
     return await chrome.tabs.sendMessage(tab.id, message);
   }
@@ -246,10 +253,11 @@ volumeRange.addEventListener('change', async () => {
   
   // 再生中の場合は音量を即座に更新
   try {
+    // 再生中の音量を反映するだけなので注入はしない
     await sendToActiveTab({
       action: 'updateVolume',
       volume: parseInt(volumeRange.value) / 100
-    });
+    }, { injectIfMissing: false });
   } catch (error) {
     // エラーは無視（再生中でない可能性）
   }

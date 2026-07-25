@@ -6,7 +6,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'synthesizeSpeech') {
     handleSynthesizeSpeech(message.text, message.speakerId, message.speed)
       .then(audioData => {
-        sendResponse({ success: true, audioData: Array.from(new Uint8Array(audioData)) });
+        sendResponse({ success: true, audioBase64: arrayBufferToBase64(audioData) });
       })
       .catch(error => {
         console.error('[VOICEVOX Background] エラー:', error);
@@ -177,6 +177,22 @@ async function handleSynthesizeSpeech(text, speakerId, speed) {
     }
     throw error;
   }
+}
+
+// 音声データを base64 へ変換する。
+// chrome.runtime のメッセージは JSON へ直列化されるため ArrayBuffer をそのまま渡せない。
+// 数値配列にすると1バイトが最大4文字（"255,"）へ膨らむが、base64 なら約1.33文字で済む。
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  // String.fromCharCode に一度に大量の引数を渡すとスタックを溢れさせるため分割する
+  const CHUNK_SIZE = 0x8000;
+  let binary = '';
+
+  for (let offset = 0; offset < bytes.length; offset += CHUNK_SIZE) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(offset, offset + CHUNK_SIZE));
+  }
+
+  return btoa(binary);
 }
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = VOICEVOX_TIMEOUT_MS) {

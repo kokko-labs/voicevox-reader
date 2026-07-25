@@ -15,6 +15,48 @@
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15) !important;
 }
 
+/* ページ内通知（alert の代替） */
+#voicevox-reader-notice {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  max-width: 360px;
+  padding: 14px 16px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border-radius: 10px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+  z-index: 1000000;
+  font-family: 'Segoe UI', 'Meiryo', sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.vr-notice-text {
+  flex: 1;
+}
+
+.vr-notice-close {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.2);
+  color: white;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.vr-notice-close:hover {
+  background: rgba(255, 255, 255, 0.35);
+}
+
 /* フローティングパネル */
 #voicevox-reader-floating-panel {
   position: fixed;

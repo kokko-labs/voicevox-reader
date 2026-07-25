@@ -14,14 +14,18 @@
     window.alert = (message) => {
       throw new Error(`Unexpected alert: ${message}`);
     };
-    window.confirm = () => true;
+    window.confirm = () => {
+      throw new Error('Unexpected confirm');
+    };
     window.__statusMessages = [];
+    // VOICEVOX の起動状態をテストから切り替えられるようにする
+    window.__voicevoxAvailable = true;
     window.chrome = {
       runtime: {
         onMessage: { addListener() {} },
         sendMessage(message) {
           if (message.action === 'checkVoicevoxStatus') {
-            return Promise.resolve({ success: true, available: true });
+            return Promise.resolve({ success: true, available: window.__voicevoxAvailable });
           }
           if (message.action === 'statusUpdate') {
             window.__statusMessages.push({
@@ -71,6 +75,11 @@
     function setFixture(html) {
       api.stopReading();
       fixture.innerHTML = html;
+      window.__voicevoxAvailable = true;
+      const notice = document.getElementById('voicevox-reader-notice');
+      if (notice) {
+        notice.remove();
+      }
     }
 
     function compact(text) {
@@ -150,6 +159,25 @@
       assert(spoken[0] === '最初の文です。', '最初の文が読み上げられていません');
       assert(window.__statusMessages.some(message => message.currentIndex === 1 && message.totalSentences === 3), '2文目のインデックス通知がありません');
       assert(window.__statusMessages.some(message => message.currentIndex === 2 && message.totalSentences === 3), '3文目のインデックス通知がありません');
+    });
+
+    test('VOICEVOX未起動時はダイアログではなくページ内通知で知らせる', async () => {
+      setFixture('<article><p>読み上げ対象の本文です。</p></article>');
+      window.__voicevoxAvailable = false;
+
+      // window.alert / window.confirm はフックで例外になるため、呼ばれればここで失敗する
+      await api.startReading();
+
+      const notice = document.getElementById('voicevox-reader-notice');
+      assert(notice, 'ページ内通知が表示されていません');
+      assert(notice.textContent.includes('VOICEVOXが起動していません'), `通知の文言が期待と違います: ${notice.textContent}`);
+      assert(notice.querySelector('.vr-notice-close'), '通知に閉じるボタンがありません');
+
+      const state = api.getState();
+      assert(!state.isPlaying, 'VOICEVOX未起動なのに再生状態になっています');
+
+      notice.querySelector('.vr-notice-close').click();
+      assert(!document.getElementById('voicevox-reader-notice'), '閉じるボタンで通知が消えていません');
     });
 
     (async () => {

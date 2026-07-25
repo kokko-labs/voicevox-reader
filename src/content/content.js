@@ -1,3 +1,13 @@
+// 同一タブへの二重注入対策。
+// manifest による宣言注入と popup からの動的注入が競合すると、このファイルが2回評価され、
+// トップレベルの const/let 再宣言で SyntaxError になる（早期 return では防げない。
+// 再宣言エラーは文の実行前、スクリプト評価時に発生するため）。
+// 全体をブロックで囲むと宣言がブロックスコープに閉じるためエラー自体が起きず、
+// フラグで2回目の実行（リスナーの二重登録）も無効化できる。
+// ※ 差分と blame を保つため、ブロック内の既存コードはあえて字下げしていない。
+if (!window.__VOICEVOX_READER_INJECTED__) {
+window.__VOICEVOX_READER_INJECTED__ = true;
+
 // 状態管理
 let isPlaying = false;
 let isPaused = false;
@@ -15,6 +25,11 @@ let synthesizeSpeechOverride = null;
 let playAudioOverride = null;
 let extractedTextCache = null;
 let floatingPanelDragCleanup = null;
+let noticeElement = null;
+let noticeTimerId = null;
+
+// ページ内通知を自動的に閉じるまでの時間
+const NOTICE_DURATION_MS = 6000;
 
 // メッセージリスナー
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -101,7 +116,7 @@ async function startReading() {
 
   if (sentences.length === 0) {
     console.error('[VOICEVOX Reader] 読み上げるテキストがありません');
-    alert('読み上げるテキストが見つかりませんでした。');
+    showNotice('読み上げるテキストが見つかりませんでした。');
     return;
   }
 
@@ -506,8 +521,52 @@ async function readNextSentence(token = playbackToken) {
     await readNextSentence(token);
   } catch (error) {
     console.error('[VOICEVOX Reader] エラー:', error);
-    alert(`エラーが発生しました: ${error.message}`);
+    showNotice(`エラーが発生しました: ${error.message}`);
     stopReading();
+  }
+}
+
+// ページ内に通知を表示する。
+// alert はページのJavaScriptを止めてしまううえ、ブラウザが発信元を閲覧中のドメイン名で示すため、
+// サイト自身が出したダイアログのように見えてしまう。
+function showNotice(message) {
+  removeNotice();
+
+  if (!document.body) {
+    return;
+  }
+
+  const notice = document.createElement('div');
+  notice.id = 'voicevox-reader-notice';
+
+  const text = document.createElement('span');
+  text.className = 'vr-notice-text';
+  text.textContent = message;
+
+  const closeButton = document.createElement('button');
+  closeButton.type = 'button';
+  closeButton.className = 'vr-notice-close';
+  closeButton.setAttribute('aria-label', '閉じる');
+  closeButton.textContent = '×';
+  closeButton.addEventListener('click', removeNotice);
+
+  notice.appendChild(text);
+  notice.appendChild(closeButton);
+  document.body.appendChild(notice);
+
+  noticeElement = notice;
+  noticeTimerId = setTimeout(removeNotice, NOTICE_DURATION_MS);
+}
+
+function removeNotice() {
+  if (noticeTimerId !== null) {
+    clearTimeout(noticeTimerId);
+    noticeTimerId = null;
+  }
+
+  if (noticeElement) {
+    noticeElement.remove();
+    noticeElement = null;
   }
 }
 
@@ -521,21 +580,8 @@ async function ensureVoicevoxAvailable() {
     console.error('[VOICEVOX Reader] VOICEVOX状態確認失敗:', error);
   }
 
-  const shouldRetry = confirm('VOICEVOXが起動していません。VOICEVOXを起動してから OK を押すと再確認します。\n\nキャンセルすると読み上げを中止します。');
-  if (!shouldRetry) {
-    return false;
-  }
-
-  try {
-    const retryResponse = await chrome.runtime.sendMessage({ action: 'checkVoicevoxStatus' });
-    if (retryResponse && retryResponse.success && retryResponse.available) {
-      return true;
-    }
-  } catch (error) {
-    console.error('[VOICEVOX Reader] VOICEVOX再確認失敗:', error);
-  }
-
-  alert('VOICEVOXに接続できませんでした。VOICEVOXを起動後、再度実行してください。');
+  // 再確認ダイアログは設けない。起動後にもう一度再生を押せば同じ経路を通るため。
+  showNotice('VOICEVOXが起動していません。起動してから、もう一度再生してください。');
   return false;
 }
 
@@ -562,8 +608,7 @@ async function synthesizeSpeech(text) {
       throw synthesisError;
     }
 
-    // Uint8Arrayに変換
-    const audioData = new Uint8Array(response.audioData).buffer;
+    const audioData = base64ToArrayBuffer(response.audioBase64);
     console.log('[VOICEVOX Reader] 音声データ受信:', audioData.byteLength, 'bytes');
     return audioData;
   } catch (error) {
@@ -573,6 +618,18 @@ async function synthesizeSpeech(text) {
     }
     throw error;
   }
+}
+
+// background から base64 で受け取った音声データを ArrayBuffer へ戻す
+function base64ToArrayBuffer(base64) {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+
+  return bytes.buffer;
 }
 
 // 音声を再生
@@ -1016,3 +1073,5 @@ if (window.__VOICEVOX_READER_ENABLE_TEST_HOOKS__) {
     }
   };
 }
+
+} // 二重注入ガード終わり
