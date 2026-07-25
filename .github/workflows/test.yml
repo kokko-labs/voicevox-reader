@@ -1,0 +1,27 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      # package-lock.json のとおりに入れる。npm install と違い、lock を書き換えない
+      - run: npm ci
+
+      - run: npm test
+
+      # manifest とコードが参照するファイルが揃っているかを検証する。
+      # パスの綴り違いは、拡張機能を読み込むまで気付けないため CI で潰しておく
+      - run: npm run build
