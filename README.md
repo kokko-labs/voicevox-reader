@@ -10,6 +10,8 @@ VOICEVOX を使用して Web ページの本文を読み上げる Chrome 拡張�
 |---|---|
 | <img src="docs/images/popup.png" width="300" alt="ポップアップの操作画面"> | <img src="docs/images/floating-panel.png" width="300" alt="ページ上に表示されるフローティングパネル"> |
 
+※ スクリーンショットの音声合成には「VOICEVOX:四国めたん」を使用しています。
+
 ## 機能
 
 - 📖 **文章単位での読み上げ**: 本文を文章単位で最後まで順次読み上げます
@@ -149,10 +151,15 @@ npm run package   # dist/ を作り、ウェブストア用の zip まで作る
 パネルは再生の操作をした時点で表示されます。ページを開いただけでは表示されません。
 これは、拡張機能を使っていないページにスクリプトを常駐させないための仕様です。
 
+## VOICEVOX との関係および利用上の注意
+
+本プロジェクトは、VOICEVOX 公式とは関係のない非公式の第三者製ツールです。
+VOICEVOX 本体、音声モデルおよび音声ライブラリは本リポジトリに含まれていません。
+利用者自身が別途 VOICEVOX を導入し、起動する必要があります。
+
+生成音声を利用する際は、[VOICEVOX ソフトウェア利用規約](https://voicevox.hiroshiba.jp/term/)および使用する各音声ライブラリ・キャラクターの利用規約が適用されます。
+必要なクレジット表記や商用・法人利用の条件は音声ライブラリごとに異なる場合があるため、[VOICEVOX 公式 Q&A](https://voicevox.hiroshiba.jp/qa/) と[音声ライブラリ利用規約一覧](https://github.com/VOICEVOX/voicevox_vvm/blob/main/TERMS.txt)を確認し、各規約に従って利用してください。
+
 ## ライセンス
 
 MIT License（[LICENSE](LICENSE) を参照）
-
-この拡張機能は VOICEVOX を利用しますが、VOICEVOX 本体および各音声ライブラリは
-本リポジトリには含まれておらず、それぞれの利用規約が別途適用されます。
-利用にあたっては [VOICEVOX 公式サイト](https://voicevox.hiroshiba.jp/) の規約を確認してください。
