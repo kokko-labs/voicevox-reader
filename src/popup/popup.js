@@ -72,13 +72,22 @@ async function loadSettings() {
   }
 }
 
-// 設定を保存
+// 設定を保存する。
+// content script は chrome.storage.local を直接見て再生に反映するため、
+// ここでの保存がそのまま再生中の設定変更になる。型は数値へ揃えておく。
 async function saveSettings() {
-  await chrome.storage.local.set({
-    speakerId: speakerSelect.value,
-    speed: speedRange.value,
-    volume: volumeRange.value
-  });
+  const settings = {
+    speed: parseFloat(speedRange.value),
+    volume: parseInt(volumeRange.value, 10)
+  };
+
+  // 話者一覧を取得できていないときは選択肢が「接続エラー」しかないため、
+  // 保存済みの話者IDを空の選択で上書きしないようにする
+  if (speakersLoaded) {
+    settings.speakerId = parseInt(speakerSelect.value, 10) || 0;
+  }
+
+  await chrome.storage.local.set(settings);
 }
 
 // ステータスを更新
@@ -136,13 +145,8 @@ playBtn.addEventListener('click', async () => {
   await saveSettings();
 
   try {
-    await sendToActiveTab({
-      action: 'play',
-      speakerId: parseInt(speakerSelect.value) || 0,
-      speed: parseFloat(speedRange.value),
-      volume: parseInt(volumeRange.value) / 100
-    });
-    
+    await sendToActiveTab({ action: 'play' });
+
     await updateStatus();
     hideError();
   } catch (error) {
@@ -248,20 +252,8 @@ volumeRange.addEventListener('input', () => {
   volumeValue.textContent = volumeRange.value;
 });
 
-volumeRange.addEventListener('change', async () => {
-  await saveSettings();
-  
-  // 再生中の場合は音量を即座に更新
-  try {
-    // 再生中の音量を反映するだけなので注入はしない
-    await sendToActiveTab({
-      action: 'updateVolume',
-      volume: parseInt(volumeRange.value) / 100
-    }, { injectIfMissing: false });
-  } catch (error) {
-    // エラーは無視（再生中でない可能性）
-  }
-});
+// 保存すると content script が storage の変更を受け取り、再生中の音声へ即座に反映する
+volumeRange.addEventListener('change', saveSettings);
 
 // スピーカー変更
 speakerSelect.addEventListener('change', saveSettings);

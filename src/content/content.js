@@ -27,17 +27,21 @@ let extractedTextCache = null;
 let floatingPanelDragCleanup = null;
 let noticeElement = null;
 let noticeTimerId = null;
+// 再生中の音声を合成したときの速度。設定変更後に再生レートを補正するために保持する
+let currentAudioSpeed = 1.0;
 
 // ページ内通知を自動的に閉じるまでの時間
 const NOTICE_DURATION_MS = 6000;
+
+// 再生設定は chrome.storage.local を唯一の情報源とし、popup と content で共有する。
+// volume は popup のスライダーの単位に合わせて 0〜100 で保存されている。
+const PLAYBACK_SETTING_KEYS = ['speakerId', 'speed', 'volume'];
 
 // メッセージリスナー
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   switch (message.action) {
     case 'play':
-      speakerId = message.speakerId;
-      speed = message.speed;
-      volume = message.volume !== undefined ? message.volume : 1.0;
+      // 設定は storage から読むため、メッセージでは運ばない
       if (isPaused) {
         resumeReading();
       } else {
@@ -61,13 +65,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       skipToNext();
       sendResponse({ success: true });
       break;
-    case 'updateVolume':
-      volume = message.volume !== undefined ? message.volume : 1.0;
-      if (currentAudio) {
-        currentAudio.volume = volume;
-      }
-      sendResponse({ success: true });
-      break;
     case 'getStatus':
       sendResponse({
         isPlaying,
@@ -83,6 +80,81 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   // すべてのケースで同期的に sendResponse 済みのため、応答ポートを開いたままにしない
 });
+
+// popup で設定が変わったら即座に取り込む
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName !== 'local') {
+    return;
+  }
+
+  const changedSettings = {};
+  for (const key of PLAYBACK_SETTING_KEYS) {
+    if (changes[key]) {
+      changedSettings[key] = changes[key].newValue;
+    }
+  }
+
+  if (Object.keys(changedSettings).length > 0) {
+    applyPlaybackSettings(changedSettings);
+  }
+});
+
+// 保存済みの再生設定を読み込んで反映する
+async function loadPlaybackSettings() {
+  try {
+    const stored = await chrome.storage.local.get(PLAYBACK_SETTING_KEYS);
+    applyPlaybackSettings(stored);
+  } catch (error) {
+    console.error('[VOICEVOX Reader] 再生設定の読み込みに失敗:', error);
+  }
+}
+
+// 再生設定を取り込む。値が欠けている項目は現在値を保つ
+function applyPlaybackSettings(values) {
+  const parsedSpeakerId = toFiniteNumber(values.speakerId);
+  if (parsedSpeakerId !== null) {
+    speakerId = parsedSpeakerId;
+  }
+
+  const parsedSpeed = toFiniteNumber(values.speed);
+  if (parsedSpeed !== null && parsedSpeed > 0) {
+    speed = parsedSpeed;
+  }
+
+  const parsedVolume = toFiniteNumber(values.volume);
+  if (parsedVolume !== null) {
+    volume = Math.min(1, Math.max(0, parsedVolume / 100));
+  }
+
+  applyPlaybackSettingsToCurrentAudio();
+}
+
+// 再生中の音声へ、いま反映できる設定だけを適用する。
+// 音量はそのまま反映できる。
+// 速度は合成時の speedScale で決まっているため、再生レートの比で近似し、
+// 本来の速度は次の文の合成から反映される。
+// 話者は合成済みの音声には反映できないため、次の文から切り替わる。
+function applyPlaybackSettingsToCurrentAudio() {
+  if (!currentAudio) {
+    return;
+  }
+
+  currentAudio.volume = volume;
+
+  if (currentAudioSpeed > 0) {
+    currentAudio.playbackRate = speed / currentAudioSpeed;
+  }
+}
+
+// storage には文字列で保存されている場合があるため、数値として解釈できるときだけ返す
+function toFiniteNumber(value) {
+  if (value === undefined || value === null || value === '') {
+    return null;
+  }
+
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
 
 // 読み上げ開始
 async function startReading() {
@@ -170,8 +242,8 @@ function resumeReading() {
 
   if (currentAudio) {
     // 一時停止していた音声を続きから再生する（読み直さない）
-    // 一時停止中に変更された音量を反映してから再開する
-    currentAudio.volume = volume;
+    // 一時停止中に変更された音量と速度を反映してから再開する
+    applyPlaybackSettingsToCurrentAudio();
     notifyStatusChange();
     currentAudio.play().catch(error => {
       // 停止・スキップで再生開始が中断されたときの AbortError は正常系なので無視する
@@ -494,6 +566,13 @@ async function readNextSentence(token = playbackToken) {
     return;
   }
 
+  // 直前の変更を取り込む。再生・前へ・次へ・合成中の再開はすべてここを通るため、
+  // 設定の読み直しはこの1箇所で足りる。
+  await loadPlaybackSettings();
+  if (token !== playbackToken || !isPlaying || isPaused) {
+    return;
+  }
+
   const sentence = sentences[currentIndex];
   console.log(`[VOICEVOX Reader] 文章 ${currentIndex + 1}/${sentences.length}:`, sentence.substring(0, 50));
   notifyStatusChange();
@@ -504,6 +583,8 @@ async function readNextSentence(token = playbackToken) {
   try {
     // 音声合成
     console.log('[VOICEVOX Reader] 音声合成開始...');
+    // 合成に使った速度を控える。再生中に速度が変わったとき、再生レートの補正に必要になる
+    const synthesisSpeed = speed;
     const audioData = await synthesizeSpeech(sentence);
     console.log('[VOICEVOX Reader] 音声合成完了');
 
@@ -511,7 +592,7 @@ async function readNextSentence(token = playbackToken) {
 
     // 音声再生
     console.log('[VOICEVOX Reader] 音声再生開始...');
-    const playResult = await playAudio(audioData);
+    const playResult = await playAudio(audioData, synthesisSpeed);
     console.log('[VOICEVOX Reader] 音声再生完了');
 
     if (playResult !== 'ended' || token !== playbackToken || !isPlaying || isPaused) return;
@@ -633,9 +714,9 @@ function base64ToArrayBuffer(base64) {
 }
 
 // 音声を再生
-function playAudio(audioData) {
+function playAudio(audioData, synthesisSpeed = speed) {
   if (playAudioOverride) {
-    return playAudioOverride(audioData);
+    return playAudioOverride(audioData, synthesisSpeed);
   }
 
   return new Promise((resolve, reject) => {
@@ -650,7 +731,8 @@ function playAudio(audioData) {
 
     const audio = new Audio(url);
     currentAudio = audio;
-    currentAudio.volume = volume;
+    currentAudioSpeed = synthesisSpeed;
+    applyPlaybackSettingsToCurrentAudio();
     let settled = false;
 
     const finish = (result, error) => {
@@ -1063,7 +1145,10 @@ if (window.__VOICEVOX_READER_ENABLE_TEST_HOOKS__) {
       isPaused,
       currentIndex,
       totalSentences: sentences.length,
-      sentences: [...sentences]
+      sentences: [...sentences],
+      speakerId,
+      speed,
+      volume
     }),
     setSynthesizeSpeechOverride: (fn) => {
       synthesizeSpeechOverride = fn;
