@@ -25,14 +25,27 @@ VOICEVOXを使用してWebページの本文を読み上げるChrome拡張機能
 4. 「パッケージ化されていない拡張機能を読み込む」をクリックします
 5. このフォルダを選択します
 
-## アイコンの設定
+## アイコン
 
-`icons` フォルダに以下のサイズのアイコン画像を配置してください：
-- `icon16.png` (16x16)
-- `icon48.png` (48x48)
-- `icon128.png` (128x128)
+読み上げの状態に応じて、ツールバーのアイコンの色が変わります。
 
-※ アイコンがない場合でも拡張機能は動作しますが、デフォルトアイコンが表示されます。
+| 状態 | 接頭辞 | 色 |
+|------|--------|-----|
+| 停止中 | `icon` | 紫 |
+| 再生中 | `playing` | 緑 |
+| 一時停止中 | `paused` | オレンジ |
+
+`icons/` には各状態 × 3サイズ（16 / 48 / 128）の PNG が入っています。
+生成元は `icons/src/` の SVG です。16px 版は縮小すると線が潰れるため、
+線を太らせた専用の図形を使っています。
+
+PNG を作り直すときは、Chromium 系ブラウザで SVG を描画します。
+
+```bash
+chrome --headless --disable-gpu --default-background-color=00000000 \
+  --screenshot=icons/icon128.png --window-size=128,128 \
+  file://$PWD/icons/src/icon128.svg
+```
 
 ## 使い方
 
@@ -60,7 +73,7 @@ voicevox-reader/
 │       ├── popup.html     # ポップアップUI
 │       ├── popup.js
 │       └── popup.css
-├── icons/                 # 拡張機能アイコン
+├── icons/                 # 拡張機能アイコン（PNG）と、その生成元の SVG（src/）
 ├── scripts/build.js       # 配布用 dist/ を作るビルドスクリプト
 └── tests/                 # jsdomベースの自動テスト
 ```

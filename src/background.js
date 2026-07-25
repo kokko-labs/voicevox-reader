@@ -34,71 +34,31 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
-// アイコンを更新
+// 再生状態ごとのアイコンの接頭辞。icons/<接頭辞><サイズ>.png を指す
+const ICON_PREFIX = {
+  playing: 'playing',
+  paused: 'paused',
+  idle: 'icon'
+};
+
+// アイコンを更新する。
+// 以前は OffscreenCanvas で毎回描き直していたが、絵柄が icons/src/*.svg と
+// 描画コードの二重管理になるため、生成済みの PNG を参照する方式へ変えた。
 function updateIcon(isPlaying, isPaused, tabId) {
-  if (isPlaying && !isPaused) {
-    // 再生中：緑色のアイコン
-    setIconColor('#4CAF50', tabId);
-  } else if (isPaused) {
-    // 一時停止中：オレンジ色のアイコン
-    setIconColor('#ff9800', tabId);
-  } else {
-    // 停止中：通常のアイコン
-    setIconColor('#667eea', tabId);
-  }
-}
+  const prefix = isPaused ? ICON_PREFIX.paused : (isPlaying ? ICON_PREFIX.playing : ICON_PREFIX.idle);
+  // 相対パスは呼び出し元スクリプト（src/background.js）の位置を基準に解決されうるため、
+  // getURL で拡張機能ルートからの絶対URLに変換してから渡す
+  const path = {
+    16: chrome.runtime.getURL(`icons/${prefix}16.png`),
+    48: chrome.runtime.getURL(`icons/${prefix}48.png`),
+    128: chrome.runtime.getURL(`icons/${prefix}128.png`)
+  };
 
-// 指定した色でアイコンを生成
-function setIconColor(color, tabId) {
-  const sizes = [16, 48, 128];
-  const imageData = {};
-  
-  sizes.forEach(size => {
-    const canvas = new OffscreenCanvas(size, size);
-    const ctx = canvas.getContext('2d');
-    
-    // 背景のグラデーション
-    const gradient = ctx.createLinearGradient(0, 0, size, size);
-    gradient.addColorStop(0, color);
-    gradient.addColorStop(1, adjustColor(color, -20));
-    
-    // 角丸の背景
-    const radius = size / 4;
-    ctx.fillStyle = gradient;
-    ctx.beginPath();
-    ctx.roundRect(0, 0, size, size, radius);
-    ctx.fill();
-    
-    // 再生アイコン（三角形）
-    ctx.fillStyle = 'white';
-    ctx.beginPath();
-    const triangleSize = size * 0.5;
-    const offsetX = size * 0.33;
-    const offsetY = size * 0.25;
-    ctx.moveTo(offsetX, offsetY);
-    ctx.lineTo(offsetX, offsetY + triangleSize);
-    ctx.lineTo(offsetX + triangleSize * 0.866, offsetY + triangleSize / 2);
-    ctx.closePath();
-    ctx.fill();
-    
-    imageData[size] = ctx.getImageData(0, 0, size, size);
+  const target = tabId ? { path, tabId } : { path };
+  chrome.action.setIcon(target).catch(error => {
+    // タブが閉じられた直後などに失敗する。アイコンの更新自体は失敗しても実害がない
+    console.warn('[VOICEVOX Background] アイコン更新に失敗:', prefix, error.message);
   });
-  
-  // アイコンを設定
-  if (tabId) {
-    chrome.action.setIcon({ imageData, tabId });
-  } else {
-    chrome.action.setIcon({ imageData });
-  }
-}
-
-// 色を暗く/明るく調整
-function adjustColor(hex, percent) {
-  const num = parseInt(hex.replace('#', ''), 16);
-  const r = Math.max(0, Math.min(255, (num >> 16) + percent));
-  const g = Math.max(0, Math.min(255, ((num >> 8) & 0x00FF) + percent));
-  const b = Math.max(0, Math.min(255, (num & 0x0000FF) + percent));
-  return '#' + ((r << 16) | (g << 8) | b).toString(16).padStart(6, '0');
 }
 
 // VOICEVOXの起動状態を確認

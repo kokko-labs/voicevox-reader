@@ -20,11 +20,13 @@ const INCLUDES = [
   { source: 'icons', accepts: name => name.endsWith('.png') }
 ];
 
-// manifest には現れないが動作に必要なファイル。
-// content script は常時注入をやめたため、popup から chrome.scripting で注入している。
-const DYNAMICALLY_INJECTED = [
+// manifest には現れず、コードから名前で参照しているファイル。
+// content script は常時注入をやめたため popup から chrome.scripting で注入し、
+// 再生状態のアイコンは background から chrome.action.setIcon で切り替えている。
+const REFERENCED_FROM_CODE = [
   'src/content/content.js',
-  'src/content/content.css'
+  'src/content/content.css',
+  ...['playing', 'paused'].flatMap(state => [16, 48, 128].map(size => `icons/${state}${size}.png`))
 ];
 
 function collectFiles(relativePath, accepts) {
@@ -112,7 +114,7 @@ function build() {
     copyInto(distDir, relativePath);
   }
 
-  const required = [...new Set([...collectManifestPaths(manifest), ...DYNAMICALLY_INJECTED])];
+  const required = [...new Set([...collectManifestPaths(manifest), ...REFERENCED_FROM_CODE])];
   const missing = required.filter(relativePath => !existsSync(path.join(distDir, relativePath)));
 
   if (missing.length > 0) {
