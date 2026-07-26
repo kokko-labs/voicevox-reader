@@ -49,6 +49,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       sendResponse({ success: true });
       break;
+    case 'playSelection':
+      // コンテキストメニューから呼ばれる。項目名のとおり選択範囲だけを読む
+      startReading({ selectionOnly: true });
+      sendResponse({ success: true });
+      break;
     case 'pause':
       pauseReading();
       sendResponse({ success: true });
@@ -157,7 +162,9 @@ function toFiniteNumber(value) {
 }
 
 // 読み上げ開始
-async function startReading() {
+// selectionOnly を指定すると、選択の仕方によらず選択範囲だけを読み上げる。
+// コンテキストメニューは項目名で動作を明示しているため、そちらから使う。
+async function startReading({ selectionOnly = false } = {}) {
   if (isPlaying) {
     stopReading();
   }
@@ -172,7 +179,13 @@ async function startReading() {
   // 選択範囲を読み上げ対象そのものとみなすか、読み始める位置とみなすかを決める
   const selection = window.getSelection();
   const selectedText = selection ? selection.toString().trim() : '';
-  const readsSelectionOnly = selectedText !== '' && spansMultipleSentences(selectedText);
+
+  if (selectionOnly && selectedText === '') {
+    showNotice('テキストが選択されていません。');
+    return;
+  }
+
+  const readsSelectionOnly = selectedText !== '' && (selectionOnly || spansMultipleSentences(selectedText));
 
   if (selectedText) {
     console.log('[VOICEVOX Reader] 選択テキスト:', selectedText.substring(0, 50),
@@ -202,8 +215,9 @@ async function startReading() {
     }
   }
 
-  if (readsSelectionOnly) {
-    // 自動で判定した結果なので、どちらの動作になったかを利用者に見せる
+  if (readsSelectionOnly && !selectionOnly) {
+    // 自動で判定した結果なので、どちらの動作になったかを利用者に見せる。
+    // コンテキストメニュー経由では項目名で動作が分かっているため出さない。
     showNotice('選択した範囲のみ読み上げます。');
   }
 

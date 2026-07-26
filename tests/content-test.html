@@ -304,6 +304,50 @@
       assert(!document.getElementById('voicevox-reader-notice'), '開始位置指定なのに範囲指定の通知が出ています');
     });
 
+    test('selectionOnly を指定すると、短い選択でも範囲だけを読み上げる', async () => {
+      setFixture(`
+        <article>
+          <p id="r1">最初の文です。次の文です。</p>
+          <p id="r2">選択した文その一です。選択した文その二です。</p>
+        </article>
+      `);
+
+      const spoken = [];
+      api.setSynthesizeSpeechOverride(async (text) => { spoken.push(text); return new ArrayBuffer(8); });
+      api.setPlayAudioOverride(async () => 'ended');
+
+      // 文の区切りをまたがない選択。自動判定なら「開始位置」になる長さ
+      const textNode = document.getElementById('r2').firstChild;
+      const range = document.createRange();
+      range.setStart(textNode, 0);
+      range.setEnd(textNode, 8);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+
+      await api.startReading({ selectionOnly: true });
+
+      assert(spoken.length === 1, `選択範囲の外まで読み上げています: ${spoken.length}文`);
+      assert(spoken[0] === '選択した文その一', `読み上げ内容が期待と違います: ${spoken[0]}`);
+      assert(!document.getElementById('voicevox-reader-notice'), 'メニュー経由では不要な通知が出ています');
+    });
+
+    test('selectionOnly で選択がないときは通知して何も読み上げない', async () => {
+      setFixture('<article><p>選択していない本文です。</p></article>');
+
+      const spoken = [];
+      api.setSynthesizeSpeechOverride(async (text) => { spoken.push(text); return new ArrayBuffer(8); });
+      api.setPlayAudioOverride(async () => 'ended');
+
+      await api.startReading({ selectionOnly: true });
+
+      assert(spoken.length === 0, `選択がないのに読み上げています: ${spoken.length}文`);
+      const notice = document.getElementById('voicevox-reader-notice');
+      assert(notice, '選択がないことの通知が出ていません');
+      assert(notice.textContent.includes('選択されていません'), `通知の文言が期待と違います: ${notice.textContent}`);
+      assert(!api.getState().isPlaying, '再生状態になっています');
+    });
+
     (async () => {
       const lines = [];
       for (const item of tests) {

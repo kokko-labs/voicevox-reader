@@ -34,6 +34,46 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
+// 選択したテキストをその場で読み上げるためのコンテキストメニュー。
+// contexts: ['selection'] により、テキストを選択しているときだけ項目が現れる。
+// この項目のクリックで activeTab が付与されるため、全ページへの常時注入は必要ない。
+const READ_SELECTION_MENU_ID = 'voicevox-reader-read-selection';
+
+chrome.runtime.onInstalled.addListener(() => {
+  // 更新時に同じIDで作り直すと失敗するため、一度消してから作る
+  chrome.contextMenus.removeAll(() => {
+    chrome.contextMenus.create({
+      id: READ_SELECTION_MENU_ID,
+      title: '選択範囲を読み上げる',
+      contexts: ['selection']
+    });
+  });
+});
+
+chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+  if (info.menuItemId !== READ_SELECTION_MENU_ID || !tab || !tab.id) {
+    return;
+  }
+
+  try {
+    await sendToTab(tab.id, { action: 'playSelection' });
+  } catch (error) {
+    console.error('[VOICEVOX Background] 選択範囲の読み上げに失敗:', error.message);
+  }
+});
+
+// 未注入のタブでは通信に失敗するため、注入してから一度だけ再試行する。
+// content script は二重注入に備えたガードを持つため、重ねて注入しても安全。
+async function sendToTab(tabId, message) {
+  try {
+    return await chrome.tabs.sendMessage(tabId, message);
+  } catch (error) {
+    await chrome.scripting.insertCSS({ target: { tabId }, files: ['src/content/content.css'] });
+    await chrome.scripting.executeScript({ target: { tabId }, files: ['src/content/content.js'] });
+    return await chrome.tabs.sendMessage(tabId, message);
+  }
+}
+
 // 再生状態ごとのアイコンの接頭辞。icons/<接頭辞><サイズ>.png を指す
 const ICON_PREFIX = {
   playing: 'playing',

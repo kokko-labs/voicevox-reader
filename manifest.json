@@ -5,6 +5,7 @@
   "description": "VOICEVOXを使用してWebページの本文を読み上げるChrome拡張機能",
   "permissions": [
     "activeTab",
+    "contextMenus",
     "scripting",
     "storage"
   ],
