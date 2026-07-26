@@ -25,9 +25,12 @@ VOICEVOX を使用して Web ページの本文を読み上げる Chrome 拡張�
 
 ## 必要条件
 
-- **VOICEVOX**: ローカルで VOICEVOX が起動している必要があります
+- **VOICEVOX**: ローカルで VOICEVOX のエンジンが動いている必要があります
   - ダウンロード: https://voicevox.hiroshiba.jp/
   - デフォルトの API エンドポイント: `http://localhost:50021`
+
+必要なのはエンジンだけで、VOICEVOX のアプリ（エディタ）を開いたままにする必要はありません。
+[VOICEVOX エンジンの常駐](#voicevox-エンジンの常駐)も参照してください。
 
 ## インストール方法
 
@@ -87,6 +90,27 @@ chrome --headless --disable-gpu --default-background-color=00000000 \
 
 こちらは選択の長さにかかわらず、**選択した範囲だけ**を読み上げます。
 項目名で動作が決まっているため、上記の自動判定は行いません。
+
+## VOICEVOX エンジンの常駐
+
+VOICEVOX は GUI の**エディタ**と、HTTP サーバーである**エンジン**に分かれており、この拡張機能が使うのはエンジンだけです。
+エディタを閉じるとエンジンも終了するため、エンジンだけを常駐させれば、エディタを開いたままにする必要がなくなります。
+
+エンジンはインストール先（`C:\Program Files\VOICEVOX` または `%LOCALAPPDATA%\Programs\VOICEVOX`）の `vv-engine\run.exe` です。
+Windows なら、PowerShell で次を実行するとログオン時に自動起動します。管理者権限は不要で、コンソール窓も表示されません。
+
+```powershell
+$action = New-ScheduledTaskAction -Execute 'C:\Program Files\VOICEVOX\vv-engine\run.exe' -Argument '--use_gpu'
+$trigger = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
+$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero)
+Register-ScheduledTask -TaskName 'VOICEVOX Engine' -Action $action -Trigger $trigger -Settings $settings -Force
+```
+
+やめるときは `Unregister-ScheduledTask -TaskName "VOICEVOX Engine" -Confirm:$false` を実行します。
+
+- `ExecutionTimeLimit` を省くと既定の3日で停止します
+- GPU が使えない環境では `-Argument '--use_gpu'` を外してください
+- エディタと同じポートを使うため、エディタを開くときは常駐を停止してください
 
 ## フォルダ構成
 
@@ -153,10 +177,11 @@ npm run package   # dist/ を作り、ウェブストア用の zip まで作る
 - VOICEVOX のエンジンがポート 50021 で動作しているか確認してください
 - 再生ボタンを押した際に確認メッセージが表示された場合は、VOICEVOX を起動してから再実行してください
 
-### VOICEVOX を自動起動できない
+### 毎回 VOICEVOX を起動するのが面倒
 
-- Chrome 拡張単体ではローカルアプリを直接起動できません
-- 自動起動まで行うには、別途 Native Messaging Host などのローカル連携機構が必要です
+エンジンを常駐させれば起動操作が不要になります。[VOICEVOX エンジンの常駐](#voicevox-エンジンの常駐)を参照してください。
+
+なお、Chrome 拡張単体ではローカルアプリを直接起動できません。
 
 ### ページで動作しない
 
