@@ -169,21 +169,21 @@ async function startReading() {
     return;
   }
 
-  // 選択テキストまたは本文を取得
+  // 選択範囲を読み上げ対象そのものとみなすか、読み始める位置とみなすかを決める
   const selection = window.getSelection();
-  let startText = '';
+  const selectedText = selection ? selection.toString().trim() : '';
+  const readsSelectionOnly = selectedText !== '' && spansMultipleSentences(selectedText);
 
-  if (selection && selection.toString().trim()) {
-    startText = selection.toString().trim();
-    console.log('[VOICEVOX Reader] 選択テキスト:', startText.substring(0, 50));
+  if (selectedText) {
+    console.log('[VOICEVOX Reader] 選択テキスト:', selectedText.substring(0, 50),
+      readsSelectionOnly ? '(範囲として読む)' : '(開始位置として扱う)');
   }
 
-  // 本文テキストを抽出
-  const bodyText = extractMainContent();
-  console.log('[VOICEVOX Reader] 抽出テキスト長:', bodyText.length);
-  console.log('[VOICEVOX Reader] 抽出テキストプレビュー:', bodyText.substring(0, 200));
+  const sourceText = readsSelectionOnly ? selectedText : extractMainContent();
+  console.log('[VOICEVOX Reader] 抽出テキスト長:', sourceText.length);
+  console.log('[VOICEVOX Reader] 抽出テキストプレビュー:', sourceText.substring(0, 200));
 
-  sentences = splitIntoSentences(bodyText);
+  sentences = splitIntoSentences(sourceText);
   console.log('[VOICEVOX Reader] 分割された文章数:', sentences.length);
 
   if (sentences.length === 0) {
@@ -192,14 +192,19 @@ async function startReading() {
     return;
   }
 
-  // 開始位置を決定
+  // 開始位置を決定。範囲として読む場合は選択の先頭から始まるので探索は不要
   currentIndex = 0;
-  if (startText) {
-    const foundIndex = findSentenceIndex(startText);
+  if (!readsSelectionOnly && selectedText) {
+    const foundIndex = findSentenceIndex(selectedText);
     if (foundIndex >= 0) {
       currentIndex = foundIndex;
       console.log('[VOICEVOX Reader] 選択位置から開始:', currentIndex);
     }
+  }
+
+  if (readsSelectionOnly) {
+    // 自動で判定した結果なので、どちらの動作になったかを利用者に見せる
+    showNotice('選択した範囲のみ読み上げます。');
   }
 
   console.log('[VOICEVOX Reader] 最初の文章:', sentences[currentIndex]);
@@ -483,6 +488,25 @@ function describeElement(element) {
     ? '.' + element.className.trim().split(/\s+/).filter(Boolean).join('.')
     : '';
   return `${element.tagName.toLowerCase()}${id}${className}`;
+}
+
+// 選択範囲が複数の文や段落にまたがっているかを判定する。
+// またいでいれば「その範囲だけを読みたい」、またいでいなければ
+// 「そこから読み始めたい」という意図とみなす。
+function spansMultipleSentences(text) {
+  const trimmed = text.trim();
+
+  // 段落やブロックをまたぐ選択は、範囲を指定する意図とみなす
+  if (/\n/.test(trimmed)) {
+    return true;
+  }
+
+  // 末尾の終端記号は1文を選んだだけなので判定から除く
+  const body = trimmed.replace(/[。．！？.!?]+$/, '');
+
+  // 半角の終端記号は「0.25.1」のような小数点と紛らわしいため、
+  // 後ろに空白が続く場合だけ文の区切りとみなす
+  return /[。．！？]|[.!?]\s/.test(body);
 }
 
 // テキストを文章単位に分割
@@ -1136,6 +1160,7 @@ if (window.__VOICEVOX_READER_ENABLE_TEST_HOOKS__) {
   window.__VOICEVOX_READER_TESTS__ = {
     extractMainContent,
     splitIntoSentences,
+    spansMultipleSentences,
     highlightSentence,
     removeHighlight,
     startReading,

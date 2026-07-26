@@ -85,6 +85,10 @@
       fixture.innerHTML = html;
       window.__voicevoxAvailable = true;
       window.__storedSettings = { floatingPanelEnabled: false };
+      const selection = window.getSelection();
+      if (selection) {
+        selection.removeAllRanges();
+      }
       const notice = document.getElementById('voicevox-reader-notice');
       if (notice) {
         notice.remove();
@@ -232,6 +236,72 @@
       // local 以外の領域の変更は取り込まない
       notify({ volume: { newValue: 100 } }, 'sync');
       assert(api.getState().volume === 0.2, 'local 以外の領域の変更を取り込んでいます');
+    });
+
+    test('選択範囲を「範囲」とみなすか「開始位置」とみなすか判定する', () => {
+      const spans = api.spansMultipleSentences;
+      assert(spans('二つ目の文です。三つ目の文です。') === true, '複数の文をまたぐ選択を範囲と判定していません');
+      assert(spans('段落その一\n段落その二') === true, '改行をまたぐ選択を範囲と判定していません');
+      assert(spans('Hello. World.') === true, '半角の文区切りを判定できていません');
+      assert(spans('これは一文です。') === false, '1文だけの選択を範囲と誤判定しています');
+      assert(spans('途中まで選んだ') === false, '終端記号のない選択を範囲と誤判定しています');
+      assert(spans('VOICEVOX 0.25.1 を使う') === false, '小数点を文の区切りと誤判定しています');
+    });
+
+    test('複数の文にまたがる選択は、その範囲だけを読み上げて停止する', async () => {
+      setFixture(`
+        <article>
+          <p id="p1">最初の文です。次の文です。</p>
+          <p id="p2">選択した文その一です。選択した文その二です。</p>
+          <p id="p3">最後の文です。</p>
+        </article>
+      `);
+
+      const spoken = [];
+      api.setSynthesizeSpeechOverride(async (text) => { spoken.push(text); return new ArrayBuffer(8); });
+      api.setPlayAudioOverride(async () => 'ended');
+
+      const range = document.createRange();
+      range.selectNodeContents(document.getElementById('p2'));
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+
+      await api.startReading();
+
+      assert(spoken.length === 2, `選択範囲の外まで読み上げています: ${spoken.length}文`);
+      assert(spoken[0] === '選択した文その一です。', `1文目が期待と違います: ${spoken[0]}`);
+      assert(spoken[1] === '選択した文その二です。', `2文目が期待と違います: ${spoken[1]}`);
+      assert(document.getElementById('voicevox-reader-notice'), '範囲指定であることの通知が出ていません');
+    });
+
+    test('1文の途中までの選択は、そこから最後まで読み上げる', async () => {
+      setFixture(`
+        <article>
+          <p id="q1">最初の文です。次の文です。</p>
+          <p id="q2">選択した文その一です。選択した文その二です。</p>
+          <p id="q3">最後の文です。</p>
+        </article>
+      `);
+
+      const spoken = [];
+      api.setSynthesizeSpeechOverride(async (text) => { spoken.push(text); return new ArrayBuffer(8); });
+      api.setPlayAudioOverride(async () => 'ended');
+
+      const textNode = document.getElementById('q2').firstChild;
+      const range = document.createRange();
+      range.setStart(textNode, 0);
+      range.setEnd(textNode, 9);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+
+      await api.startReading();
+
+      assert(spoken.length === 3, `選択位置から最後まで読み上げていません: ${spoken.length}文`);
+      assert(spoken[0] === '選択した文その一です。', `開始位置が期待と違います: ${spoken[0]}`);
+      assert(spoken[2] === '最後の文です。', `末尾まで読み上げていません: ${spoken[2]}`);
+      assert(!document.getElementById('voicevox-reader-notice'), '開始位置指定なのに範囲指定の通知が出ています');
     });
 
     (async () => {
