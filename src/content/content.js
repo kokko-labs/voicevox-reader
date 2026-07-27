@@ -1018,7 +1018,10 @@ function showFloatingPanel() {
   floatingPanel.innerHTML = `
     <div class="vr-panel-header">
       <span class="vr-panel-title">VOICEVOX Reader</span>
-      <span class="vr-panel-status">停止中</span>
+      <span class="vr-panel-actions">
+        <span class="vr-panel-status">停止中</span>
+        <button class="vr-panel-close" type="button" title="閉じる" aria-label="閉じる">×</button>
+      </span>
     </div>
     <div class="vr-panel-controls">
       <button class="vr-btn vr-btn-prev" title="前へ">
@@ -1051,18 +1054,14 @@ function showFloatingPanel() {
 
   document.body.appendChild(floatingPanel);
 
-  // イベントリスナーを設定
+  // イベントリスナーを設定。
+  // 設定は readNextSentence が storage から読み直すため、ここでは読み込まない
   floatingPanel.querySelector('.vr-btn-play').addEventListener('click', () => {
-    chrome.storage.local.get(['speakerId', 'speed', 'volume'], (settings) => {
-      speakerId = parseInt(settings.speakerId) || 0;
-      speed = parseFloat(settings.speed) || 1.0;
-      volume = settings.volume !== undefined ? parseFloat(settings.volume) / 100 : 1.0;
-      if (isPaused) {
-        resumeReading();
-      } else {
-        startReading();
-      }
-    });
+    if (isPaused) {
+      resumeReading();
+    } else {
+      startReading();
+    }
   });
 
   floatingPanel.querySelector('.vr-btn-pause').addEventListener('click', pauseReading);
@@ -1070,8 +1069,17 @@ function showFloatingPanel() {
   floatingPanel.querySelector('.vr-btn-prev').addEventListener('click', skipToPrevious);
   floatingPanel.querySelector('.vr-btn-next').addEventListener('click', skipToNext);
 
+  floatingPanel.querySelector('.vr-panel-close').addEventListener('click', () => {
+    hideFloatingPanel();
+    // 次にページを開いたときに復活しないよう、設定にも反映する
+    chrome.storage.local.set({ floatingPanelEnabled: false });
+  });
+
   // ドラッグ機能
   makeDraggable(floatingPanel);
+
+  // 再生中に表示した場合も含め、現在の状態をボタンへ反映する
+  updateFloatingPanelState();
 
   console.log('[VOICEVOX Reader] フローティングパネル表示');
 }
@@ -1099,6 +1107,10 @@ function updateFloatingPanelState() {
   const pauseBtn = floatingPanel.querySelector('.vr-btn-pause');
   const prevBtn = floatingPanel.querySelector('.vr-btn-prev');
   const nextBtn = floatingPanel.querySelector('.vr-btn-next');
+
+  // 読み上げ中（一時停止を含む）は閉じられないようにする。
+  // 読み上げたまま操作手段を失うことを防ぐため。
+  floatingPanel.querySelector('.vr-panel-close').disabled = isPlaying;
 
   if (isPlaying && !isPaused) {
     statusText.textContent = sentences.length > 0 ? `再生中 (${currentIndex + 1}/${sentences.length})` : '再生中';
@@ -1130,6 +1142,11 @@ function makeDraggable(element) {
   header.style.cursor = 'move';
 
   const onMouseDown = (e) => {
+    // ヘッダー上のボタン（閉じるなど）を押したときはドラッグを始めない
+    if (e.target.closest('button')) {
+      return;
+    }
+
     isDragging = true;
     initialX = e.clientX - element.offsetLeft;
     initialY = e.clientY - element.offsetTop;
@@ -1175,6 +1192,7 @@ if (window.__VOICEVOX_READER_ENABLE_TEST_HOOKS__) {
     extractMainContent,
     splitIntoSentences,
     spansMultipleSentences,
+    toggleFloatingPanel,
     highlightSentence,
     removeHighlight,
     startReading,

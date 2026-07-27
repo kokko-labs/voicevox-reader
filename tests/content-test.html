@@ -58,6 +58,13 @@
               callback(value);
             }
             return Promise.resolve(value);
+          },
+          set(values, callback) {
+            Object.assign(window.__storedSettings, values);
+            if (typeof callback === 'function') {
+              callback();
+            }
+            return Promise.resolve();
           }
         }
       }
@@ -82,6 +89,7 @@
 
     function setFixture(html) {
       api.stopReading();
+      api.toggleFloatingPanel(false);
       fixture.innerHTML = html;
       window.__voicevoxAvailable = true;
       window.__storedSettings = { floatingPanelEnabled: false };
@@ -346,6 +354,44 @@
       assert(notice, '選択がないことの通知が出ていません');
       assert(notice.textContent.includes('選択されていません'), `通知の文言が期待と違います: ${notice.textContent}`);
       assert(!api.getState().isPlaying, '再生状態になっています');
+    });
+
+    test('フローティングパネルの閉じるボタンは読み上げ中は使えない', async () => {
+      setFixture('<article><p>閉じるボタンのテストです。</p></article>');
+      api.toggleFloatingPanel(true);
+
+      const panel = document.getElementById('voicevox-reader-floating-panel');
+      assert(panel, 'フローティングパネルが表示されていません');
+      const closeBtn = panel.querySelector('.vr-panel-close');
+      assert(closeBtn, '閉じるボタンがありません');
+      assert(!closeBtn.disabled, '停止中なのに閉じるボタンが無効です');
+
+      // 再生中の状態を、playAudio が呼ばれた瞬間に捕まえる
+      let disabledWhilePlaying = null;
+      api.setSynthesizeSpeechOverride(async () => new ArrayBuffer(8));
+      api.setPlayAudioOverride(async () => {
+        disabledWhilePlaying = closeBtn.disabled;
+        return 'ended';
+      });
+
+      await api.startReading();
+
+      assert(disabledWhilePlaying === true, '読み上げ中に閉じるボタンが無効になっていません');
+      assert(!closeBtn.disabled, '読み上げ終了後に閉じるボタンが有効へ戻っていません');
+    });
+
+    test('閉じるボタンでパネルを閉じると設定にも反映される', () => {
+      setFixture('<article><p>閉じる操作のテストです。</p></article>');
+      window.__storedSettings.floatingPanelEnabled = true;
+      api.toggleFloatingPanel(true);
+
+      const panel = document.getElementById('voicevox-reader-floating-panel');
+      assert(panel, 'フローティングパネルが表示されていません');
+
+      panel.querySelector('.vr-panel-close').click();
+
+      assert(!document.getElementById('voicevox-reader-floating-panel'), 'パネルが閉じていません');
+      assert(window.__storedSettings.floatingPanelEnabled === false, '設定に反映されていません');
     });
 
     (async () => {
