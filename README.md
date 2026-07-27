@@ -30,7 +30,7 @@ VOICEVOX を使用して Web ページの本文を読み上げる Chrome 拡張�
   - デフォルトの API エンドポイント: `http://localhost:50021`
 
 必要なのはエンジンだけで、VOICEVOX のアプリ（エディタ）を開いたままにする必要はありません。
-[VOICEVOX エンジンの常駐](#voicevox-エンジンの常駐)も参照してください。
+[エンジンだけを起動する](#エンジンだけを起動する)も参照してください。
 
 ## インストール方法
 
@@ -91,26 +91,24 @@ chrome --headless --disable-gpu --default-background-color=00000000 \
 こちらは選択の長さにかかわらず、**選択した範囲だけ**を読み上げます。
 項目名で動作が決まっているため、上記の自動判定は行いません。
 
-## VOICEVOX エンジンの常駐
+## エンジンだけを起動する
 
 VOICEVOX は GUI の**エディタ**と、HTTP サーバーである**エンジン**に分かれており、この拡張機能が使うのはエンジンだけです。
-エディタを閉じるとエンジンも終了するため、エンジンだけを常駐させれば、エディタを開いたままにする必要がなくなります。
+エディタはエンジンを子プロセスとして起動するため、エディタを閉じるとエンジンも終了します。
+エンジンだけを起動すれば、エディタを開いたままにする必要がなくなります。
 
-エンジンはインストール先（`C:\Program Files\VOICEVOX` または `%LOCALAPPDATA%\Programs\VOICEVOX`）の `vv-engine\run.exe` です。
-Windows なら、PowerShell で次を実行するとログオン時に自動起動します。管理者権限は不要で、コンソール窓も表示されません。
+Windows なら `tools/start-engine.cmd` をダブルクリックしてください。
+コンソール窓が開いてエンジンのログが流れます。`Ctrl+C` を押すか窓を閉じると終了します。
 
-```powershell
-$action = New-ScheduledTaskAction -Execute 'C:\Program Files\VOICEVOX\vv-engine\run.exe' -Argument '--use_gpu'
-$trigger = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
-$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero)
-Register-ScheduledTask -TaskName 'VOICEVOX Engine' -Action $action -Trigger $trigger -Settings $settings -Force
+インストール先やオプションを変えるときは、ファイル先頭の2行を書き換えます。
+
+```bat
+set "ENGINE=C:\Program Files\VOICEVOX\vv-engine\run.exe"
+set "OPTIONS=--use_gpu"
 ```
 
-やめるときは `Unregister-ScheduledTask -TaskName "VOICEVOX Engine" -Confirm:$false` を実行します。
-
-- `ExecutionTimeLimit` を省くと既定の3日で停止します
-- GPU が使えない環境では `-Argument '--use_gpu'` を外してください
-- エディタと同じポートを使うため、エディタを開くときは常駐を停止してください
+- `--use_gpu` が使えるかは環境によります。起動に失敗する場合は `OPTIONS` を空にしてください
+- エディタと同じポート 50021 を使うため、エディタを開くときは先にエンジンを終了してください
 
 ## フォルダ構成
 
@@ -128,6 +126,7 @@ voicevox-reader/
 │       └── popup.css
 ├── icons/                 # 拡張機能アイコン（PNG）と、その生成元の SVG（src/）
 ├── scripts/build.js       # 配布用 dist/ を作るビルドスクリプト
+├── tools/start-engine.cmd # VOICEVOX エンジンだけを起動する
 ├── docs/images/           # README 用のスクリーンショット
 └── tests/                 # jsdomベースの自動テスト
 ```
@@ -177,9 +176,9 @@ npm run package   # dist/ を作り、ウェブストア用の zip まで作る
 - VOICEVOX のエンジンがポート 50021 で動作しているか確認してください
 - 再生ボタンを押した際に確認メッセージが表示された場合は、VOICEVOX を起動してから再実行してください
 
-### 毎回 VOICEVOX を起動するのが面倒
+### VOICEVOX アプリを開いたままにしたくない
 
-エンジンを常駐させれば起動操作が不要になります。[VOICEVOX エンジンの常駐](#voicevox-エンジンの常駐)を参照してください。
+エンジンだけを起動すれば、アプリは不要です。[エンジンだけを起動する](#エンジンだけを起動する)を参照してください。
 
 なお、Chrome 拡張単体ではローカルアプリを直接起動できません。
 
