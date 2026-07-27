@@ -394,6 +394,51 @@
       assert(window.__storedSettings.floatingPanelEnabled === false, '設定に反映されていません');
     });
 
+    test('注入済みのタブでも、設定の変更でパネルの表示が切り替わる', () => {
+      setFixture('<article><p>パネル追従のテストです。</p></article>');
+      const notify = (changes) => {
+        window.__storageListeners.forEach(listener => listener(changes, 'local'));
+      };
+
+      // 復元処理は注入時にしか走らない。すでに注入済みの状態を想定する
+      assert(!document.getElementById('voicevox-reader-floating-panel'), '前提としてパネルは非表示のはずです');
+
+      notify({ floatingPanelEnabled: { newValue: true } });
+      assert(document.getElementById('voicevox-reader-floating-panel'), '設定を有効にしてもパネルが表示されません');
+
+      notify({ floatingPanelEnabled: { newValue: false } });
+      assert(!document.getElementById('voicevox-reader-floating-panel'), '設定を無効にしてもパネルが消えません');
+
+      // local 以外の領域は無視する
+      notify({ floatingPanelEnabled: { newValue: true } });
+      window.__storageListeners.forEach(listener => listener({ floatingPanelEnabled: { newValue: false } }, 'sync'));
+      assert(document.getElementById('voicevox-reader-floating-panel'), 'local 以外の領域の変更を取り込んでいます');
+    });
+
+    test('右クリック読み上げでは、設定が無効でも操作パネルを表示する', async () => {
+      setFixture('<article><p id="s1">右クリック読み上げのテストです。</p></article>');
+      // パネルは無効。従来はこの状態だとパネルが出なかった
+      window.__storedSettings.floatingPanelEnabled = false;
+      assert(!document.getElementById('voicevox-reader-floating-panel'), '前提としてパネルは非表示のはずです');
+
+      api.setSynthesizeSpeechOverride(async () => new ArrayBuffer(8));
+      api.setPlayAudioOverride(async () => 'ended');
+
+      const textNode = document.getElementById('s1').firstChild;
+      const range = document.createRange();
+      range.setStart(textNode, 0);
+      range.setEnd(textNode, 10);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+
+      // background から playSelection を受け取ったときと同じ経路を通す
+      api.showFloatingPanel();
+      await api.startReading({ selectionOnly: true });
+
+      assert(document.getElementById('voicevox-reader-floating-panel'), '操作パネルが表示されていません');
+    });
+
     (async () => {
       const lines = [];
       for (const item of tests) {

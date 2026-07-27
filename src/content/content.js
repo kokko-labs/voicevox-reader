@@ -50,7 +50,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ success: true });
       break;
     case 'playSelection':
-      // コンテキストメニューから呼ばれる。項目名のとおり選択範囲だけを読む
+      // コンテキストメニューから呼ばれる。項目名のとおり選択範囲だけを読む。
+      // この経路ではポップアップが開いていないため、操作パネルを出さないと
+      // 停止も一時停止もできなくなる。設定の値によらず表示する。
+      showFloatingPanel();
       startReading({ selectionOnly: true });
       sendResponse({ success: true });
       break;
@@ -101,6 +104,13 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
 
   if (Object.keys(changedSettings).length > 0) {
     applyPlaybackSettings(changedSettings);
+  }
+
+  // パネルの表示設定も追従させる。
+  // 復元処理は content script の注入時にしか走らないため、これがないと
+  // 「すでに注入済みのタブ」では設定を変えてもパネルが現れない。
+  if (changes.floatingPanelEnabled) {
+    toggleFloatingPanel(changes.floatingPanelEnabled.newValue === true);
   }
 });
 
@@ -1013,9 +1023,17 @@ function toggleFloatingPanel(enabled) {
 function showFloatingPanel() {
   if (floatingPanel) return;
 
-  floatingPanel = document.createElement('div');
-  floatingPanel.id = 'voicevox-reader-floating-panel';
-  floatingPanel.innerHTML = `
+  // 読み込み途中のページへ注入されると body がまだ無い。
+  // ここで throw すると floatingPanel に中途半端な要素が残り、
+  // 以後 early return で二度と表示できなくなるため、先に確認する。
+  if (!document.body) {
+    console.warn('[VOICEVOX Reader] body がないためパネルを表示できません');
+    return;
+  }
+
+  const panel = document.createElement('div');
+  panel.id = 'voicevox-reader-floating-panel';
+  panel.innerHTML = `
     <div class="vr-panel-header">
       <span class="vr-panel-title">VOICEVOX Reader</span>
       <span class="vr-panel-actions">
@@ -1052,11 +1070,13 @@ function showFloatingPanel() {
     </div>
   `;
 
-  document.body.appendChild(floatingPanel);
+  document.body.appendChild(panel);
+  // 追加に成功してから保持する。失敗した場合に壊れた要素を残さないため
+  floatingPanel = panel;
 
   // イベントリスナーを設定。
   // 設定は readNextSentence が storage から読み直すため、ここでは読み込まない
-  floatingPanel.querySelector('.vr-btn-play').addEventListener('click', () => {
+  panel.querySelector('.vr-btn-play').addEventListener('click', () => {
     if (isPaused) {
       resumeReading();
     } else {
@@ -1064,19 +1084,19 @@ function showFloatingPanel() {
     }
   });
 
-  floatingPanel.querySelector('.vr-btn-pause').addEventListener('click', pauseReading);
-  floatingPanel.querySelector('.vr-btn-stop').addEventListener('click', stopReading);
-  floatingPanel.querySelector('.vr-btn-prev').addEventListener('click', skipToPrevious);
-  floatingPanel.querySelector('.vr-btn-next').addEventListener('click', skipToNext);
+  panel.querySelector('.vr-btn-pause').addEventListener('click', pauseReading);
+  panel.querySelector('.vr-btn-stop').addEventListener('click', stopReading);
+  panel.querySelector('.vr-btn-prev').addEventListener('click', skipToPrevious);
+  panel.querySelector('.vr-btn-next').addEventListener('click', skipToNext);
 
-  floatingPanel.querySelector('.vr-panel-close').addEventListener('click', () => {
+  panel.querySelector('.vr-panel-close').addEventListener('click', () => {
     hideFloatingPanel();
     // 次にページを開いたときに復活しないよう、設定にも反映する
     chrome.storage.local.set({ floatingPanelEnabled: false });
   });
 
   // ドラッグ機能
-  makeDraggable(floatingPanel);
+  makeDraggable(panel);
 
   // 再生中に表示した場合も含め、現在の状態をボタンへ反映する
   updateFloatingPanelState();
@@ -1193,6 +1213,7 @@ if (window.__VOICEVOX_READER_ENABLE_TEST_HOOKS__) {
     splitIntoSentences,
     spansMultipleSentences,
     toggleFloatingPanel,
+    showFloatingPanel,
     highlightSentence,
     removeHighlight,
     startReading,
