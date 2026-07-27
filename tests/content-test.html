@@ -415,7 +415,7 @@
       assert(document.getElementById('voicevox-reader-floating-panel'), 'local 以外の領域の変更を取り込んでいます');
     });
 
-    test('右クリック読み上げでは、設定が無効でも操作パネルを表示する', async () => {
+    test('右クリック読み上げでは、設定が無効でも操作パネルを表示し設定も揃える', async () => {
       setFixture('<article><p id="s1">右クリック読み上げのテストです。</p></article>');
       // パネルは無効。従来はこの状態だとパネルが出なかった
       window.__storedSettings.floatingPanelEnabled = false;
@@ -433,10 +433,12 @@
       selection.addRange(range);
 
       // background から playSelection を受け取ったときと同じ経路を通す
-      api.showFloatingPanel();
+      api.enableFloatingPanel();
       await api.startReading({ selectionOnly: true });
 
       assert(document.getElementById('voicevox-reader-floating-panel'), '操作パネルが表示されていません');
+      assert(window.__storedSettings.floatingPanelEnabled === true,
+        `表示設定が有効になっていません: ${window.__storedSettings.floatingPanelEnabled}`);
     });
 
     (async () => {

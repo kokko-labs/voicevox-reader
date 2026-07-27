@@ -53,7 +53,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // コンテキストメニューから呼ばれる。項目名のとおり選択範囲だけを読む。
       // この経路ではポップアップが開いていないため、操作パネルを出さないと
       // 停止も一時停止もできなくなる。設定の値によらず表示する。
-      showFloatingPanel();
+      enableFloatingPanel();
       startReading({ selectionOnly: true });
       sendResponse({ success: true });
       break;
@@ -1019,6 +1019,14 @@ function toggleFloatingPanel(enabled) {
   }
 }
 
+// パネルを表示し、表示設定にも反映する。
+// 表示だけして設定を変えないと、ポップアップのトグルが消灯したまま
+// パネルだけが見えている状態になり、トグルを押しても見た目が変わらない。
+function enableFloatingPanel() {
+  showFloatingPanel();
+  chrome.storage.local.set({ floatingPanelEnabled: true });
+}
+
 // フローティングパネルを表示
 function showFloatingPanel() {
   if (floatingPanel) return;
@@ -1213,7 +1221,7 @@ if (window.__VOICEVOX_READER_ENABLE_TEST_HOOKS__) {
     splitIntoSentences,
     spansMultipleSentences,
     toggleFloatingPanel,
-    showFloatingPanel,
+    enableFloatingPanel,
     highlightSentence,
     removeHighlight,
     startReading,
