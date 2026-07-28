@@ -18,7 +18,9 @@ function openPopup({
   status = { isPlaying: false, isPaused: false },
   voicevoxAvailable = true,
   speakersReachable = true,
-  storedSettings = { speakerId: 2, speed: 1, volume: 100 }
+  systemVoices = [],
+  voicesArriveLate = false,
+  storedSettings = { voice: 'voicevox:2', speed: 1, volume: 100 }
 } = {}) {
   const virtualConsole = new VirtualConsole();
   const dom = new JSDOM(popupHtml, { runScripts: 'outside-only', virtualConsole });
@@ -57,8 +59,30 @@ function openPopup({
     return { ok: true, json: async () => DEFAULT_SPEAKERS };
   };
 
+  // 実際のブラウザでは音声の一覧が非同期に用意され、最初の getVoices() は
+  // 空で返ることがある。voicesArriveLate でその状況を再現する。
+  let availableVoices = voicesArriveLate ? [] : systemVoices;
+  const voiceListeners = [];
+
+  window.speechSynthesis = {
+    getVoices: () => availableVoices,
+    addEventListener: (type, fn) => { if (type === 'voiceschanged') { voiceListeners.push(fn); } }
+  };
+
+  const deliverVoices = async () => {
+    availableVoices = systemVoices;
+    for (const fn of voiceListeners) {
+      await fn();
+    }
+  };
+
   window.eval(popupJs);
-  window.document.dispatchEvent(new window.Event('DOMContentLoaded'));
+
+  // 解析中なら jsdom がこの後 DOMContentLoaded を発火するので待つだけでよい。
+  // ここで手動でも発火させると初期化が2回走り、実機と違う状態になる。
+  if (window.document.readyState !== 'loading') {
+    window.document.dispatchEvent(new window.Event('DOMContentLoaded'));
+  }
 
   return {
     window,
@@ -66,6 +90,8 @@ function openPopup({
     sentToTab,
     savedSettings,
     click: (id) => window.document.getElementById(id).dispatchEvent(new window.Event('click')),
+    // 音声の一覧が遅れて届いた場面を再現する
+    deliverVoices,
     // content から状態通知が届いた場面を再現する。
     // fromTabId を変えると、別のタブから届いた場合を再現できる。
     notifyStatus: (state, fromTabId = 1) =>
@@ -145,6 +171,103 @@ test('VOICEVOX が起動していなければ再生を送らずに知らせる',
   const error = popup.doc.getElementById('errorMessage');
   assert(error.style.display === 'block', 'エラーが表示されていません');
   assert(error.textContent.includes('起動'), `文言が期待と違います: ${error.textContent}`);
+  popup.close();
+});
+
+test('OS標準の音声を選んでいれば VOICEVOX の起動を確認しない', async () => {
+  // VOICEVOX が起動していなくても、OS標準の音声なら読み上げられる
+  const popup = openPopup({
+    voicevoxAvailable: false,
+    speakersReachable: false,
+    systemVoices: [{ voiceURI: 'Microsoft Zira', name: 'Microsoft Zira', lang: 'en-US' }],
+    storedSettings: { voice: 'system:Microsoft Zira', speed: 1, volume: 100 }
+  });
+  await settle();
+
+  popup.sentToTab.length = 0;
+  popup.click('playBtn');
+  await settle();
+
+  assert(popup.sentToTab.includes('play'),
+    'OS標準の音声なのに再生が送られていません');
+  popup.close();
+});
+
+test('OS標準の音声も読み上げモデルの一覧に並ぶ', async () => {
+  const popup = openPopup({
+    systemVoices: [{ voiceURI: 'Microsoft Zira', name: 'Microsoft Zira', lang: 'en-US' }]
+  });
+  await settle();
+
+  const values = Array.from(popup.doc.getElementById('speakerSelect').options).map(o => o.value);
+  assert(values.includes('voicevox:2'), `VOICEVOX の声がありません: ${values.join(', ')}`);
+  assert(values.includes('system:Microsoft Zira'), `OS標準の声がありません: ${values.join(', ')}`);
+  popup.close();
+});
+
+test('音声の一覧が遅れて届いても、OS標準の音声が並ぶ', async () => {
+  // ブラウザでは最初の getVoices() が空で返ることがある。
+  // そこで諦めると「OS標準の音声」の組が出ないままになる。
+  const voice = { voiceURI: 'Microsoft Zira', name: 'Microsoft Zira', lang: 'en-US' };
+  const popup = openPopup({
+    systemVoices: [voice],
+    voicesArriveLate: true,
+    storedSettings: { voice: 'system:Microsoft Zira', speed: 1, volume: 100 }
+  });
+  await settle();
+
+  const select = popup.doc.getElementById('speakerSelect');
+  const before = Array.from(select.options).map(o => o.value);
+  assert(!before.includes('system:Microsoft Zira'), '前提: この時点ではまだ並んでいないはずです');
+
+  await popup.deliverVoices();
+  await settle();
+
+  const after = Array.from(select.options).map(o => o.value);
+  assert(after.includes('system:Microsoft Zira'), `OS標準の音声が並んでいません: ${after.join(', ')}`);
+  assert(select.value === 'system:Microsoft Zira',
+    `保存済みの選択が復元されていません: ${select.value}`);
+  popup.close();
+});
+
+test('音声の一覧が届き直しても選択肢が重複しない', async () => {
+  const voice = { voiceURI: 'Microsoft Zira', name: 'Microsoft Zira', lang: 'en-US' };
+  const popup = openPopup({ systemVoices: [voice] });
+  await settle();
+
+  await popup.deliverVoices();
+  await popup.deliverVoices();
+  await settle();
+
+  const select = popup.doc.getElementById('speakerSelect');
+  const count = Array.from(select.options).filter(o => o.value === 'system:Microsoft Zira').length;
+  assert(count === 1, `同じ音声が ${count} 個並んでいます`);
+  popup.close();
+});
+
+test('OS標準の音声は言語ごとにまとまり、順序が安定する', async () => {
+  // ブラウザが返す順は言語が入り混じる。実機で観測した並びに、地域違いを足して渡す。
+  const popup = openPopup({
+    systemVoices: [
+      { voiceURI: 'Ayumi', name: 'Microsoft Ayumi', lang: 'ja-JP' },
+      { voiceURI: 'Mark', name: 'Microsoft Mark', lang: 'en-US' },
+      { voiceURI: 'Zira', name: 'Microsoft Zira', lang: 'en-US' },
+      { voiceURI: 'Hazel', name: 'Microsoft Hazel', lang: 'en-GB' },
+      { voiceURI: 'David', name: 'Microsoft David', lang: 'en-US' },
+      { voiceURI: 'Haruka', name: 'Microsoft Haruka', lang: 'ja-JP' }
+    ]
+  });
+  await settle();
+
+  const groups = Array.from(popup.doc.querySelectorAll('optgroup[data-system]'));
+  assert(groups.length === 2, `言語ごとに分かれていません: ${groups.length} 組`);
+  assert(groups[0].label === 'OS 標準 (英語)', `1組目の見出しが違います: ${groups[0].label}`);
+  assert(groups[1].label === 'OS 標準 (日本語)', `2組目の見出しが違います: ${groups[1].label}`);
+
+  // en-US と en-GB は地域が違うだけなので同じ組に入る
+  const english = Array.from(groups[0].children).map(o => o.textContent);
+  assert(english.join(',') === 'Microsoft David,Microsoft Hazel,Microsoft Mark,Microsoft Zira',
+    `英語の音声が名前順にまとまっていません: ${english.join(', ')}`);
   popup.close();
 });
 

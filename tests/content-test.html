@@ -25,6 +25,24 @@
     window.__storageListeners = [];
     // content が送ったメッセージの種類を記録する
     window.__sentActions = [];
+
+    // jsdom には音声合成が無いので、OS標準の音声を模したものを用意する
+    window.__systemSpoken = [];
+    window.SpeechSynthesisUtterance = function (text) {
+      this.text = text;
+      this.onend = null;
+      this.onerror = null;
+    };
+    window.speechSynthesis = {
+      getVoices: () => [{ voiceURI: 'TestVoice', name: 'Test Voice', lang: 'en-US' }],
+      speak(utterance) {
+        window.__systemSpoken.push(utterance.text);
+        setTimeout(() => { if (utterance.onend) { utterance.onend(); } }, 0);
+      },
+      cancel() {},
+      pause() {},
+      resume() {}
+    };
     window.chrome = {
       runtime: {
         onMessage: { addListener() {} },
@@ -93,9 +111,11 @@
     function setFixture(html) {
       api.stopReading();
       api.hideFloatingPanel();
+      api.setSpeaker(null);
       fixture.innerHTML = html;
       window.__voicevoxAvailable = true;
-      window.__storedSettings = { floatingPanelEnabled: false };
+      // 声の指定も既定へ戻す。前のテストの選択が残ると方式がずれる
+      window.__storedSettings = { floatingPanelEnabled: false, voice: 'voicevox:0' };
       const selection = window.getSelection();
       if (selection) {
         selection.removeAllRanges();
@@ -442,6 +462,114 @@
       assert(window.__sentActions.includes('statusUpdate'), '状態通知が送られていません');
       assert(!window.__sentActions.includes('updateIcon'),
         'updateIcon が残っています（statusUpdate と二重になります）');
+    });
+
+    // 一時停止・再開の窓口を差し替えて、制御側の動きだけを取り出して確かめる。
+    // 「その場で止められたか」を方式が返し、制御側はそれに従うだけ、という約束事の検証。
+    function useFakeSpeaker({ canPause }) {
+      const calls = [];
+      let releaseFirst = null;
+      let firstPending = true;
+
+      api.setSpeaker({
+        async ensureReady() { return true; },
+        speak(text) {
+          calls.push(`speak:${text}`);
+          if (firstPending) {
+            firstPending = false;
+            return new Promise(resolve => { releaseFirst = resolve; });
+          }
+          return Promise.resolve('ended');
+        },
+        pause() { calls.push('pause'); return canPause; },
+        resume() { calls.push('resume'); return canPause; },
+        stop() { calls.push('stop'); },
+        applySettings() {}
+      });
+
+      return { calls, finishFirst: () => releaseFirst && releaseFirst('ended') };
+    }
+
+    test('その場で止められたときは、再開しても同じ文を読み直さない', async () => {
+      setFixture('<article><p id="pz">一時停止の確認です。次の文です。</p></article>');
+      const fake = useFakeSpeaker({ canPause: true });
+
+      const reading = api.startReading();
+      await new Promise(resolve => setTimeout(resolve, 20));
+
+      const firstSpoken = fake.calls[0];
+      api.pauseReading();
+      api.resumeReading();
+      fake.finishFirst();
+      await reading;
+
+      assert(fake.calls[1] === 'pause' && fake.calls[2] === 'resume',
+        `一時停止と再開が窓口へ伝わっていません: ${fake.calls.join(' / ')}`);
+      const repeated = fake.calls.filter(c => c === firstSpoken).length;
+      assert(repeated === 1, `同じ文を読み直しています: ${fake.calls.join(' / ')}`);
+    });
+
+    test('その場で止められないときは、再開時に現在の文を読み直す', async () => {
+      setFixture('<article><p id="pz">一時停止の確認です。次の文です。</p></article>');
+      const fake = useFakeSpeaker({ canPause: false });
+
+      const reading = api.startReading();
+      await new Promise(resolve => setTimeout(resolve, 20));
+
+      const firstSpoken = fake.calls[0];
+      api.pauseReading();
+      api.resumeReading();
+      await new Promise(resolve => setTimeout(resolve, 20));
+      fake.finishFirst();
+      await reading;
+
+      const repeated = fake.calls.filter(c => c === firstSpoken).length;
+      assert(repeated === 2, `現在の文を読み直していません: ${fake.calls.join(' / ')}`);
+    });
+
+    test('voice の指定で読み上げ方式が切り替わる', () => {
+      setFixture('<article><p>方式切り替えのテストです。</p></article>');
+      const notify = (changes) => {
+        window.__storageListeners.forEach(listener => listener(changes, 'local'));
+      };
+
+      notify({ voice: { newValue: 'system:Microsoft Zira' } });
+      let state = api.getState();
+      assert(state.voice.engine === 'system', `OS標準が選ばれていません: ${JSON.stringify(state.voice)}`);
+      assert(state.voice.id === 'Microsoft Zira', `声の識別子が違います: ${state.voice.id}`);
+
+      notify({ voice: { newValue: 'voicevox:8' } });
+      state = api.getState();
+      assert(state.voice.engine === 'voicevox', `VOICEVOX が選ばれていません: ${JSON.stringify(state.voice)}`);
+      assert(state.speakerId === 8, `話者IDが反映されていません: ${state.speakerId}`);
+    });
+
+    test('OS標準の声を選ぶと、VOICEVOX の合成を使わずに読み上げる', async () => {
+      setFixture('<article><p>標準音声のテストです。</p></article>');
+      window.__storedSettings = { voice: 'system:TestVoice', speed: 1, volume: 100 };
+      window.__systemSpoken = [];
+
+      let voicevoxUsed = false;
+      api.setSynthesizeSpeechOverride(async () => { voicevoxUsed = true; return new ArrayBuffer(8); });
+      api.setPlayAudioOverride(async () => 'ended');
+
+      await api.startReading();
+
+      assert(window.__systemSpoken.length > 0, 'OS標準の音声で読み上げていません');
+      assert(!voicevoxUsed, 'OS標準を選んだのに VOICEVOX の合成を呼んでいます');
+    });
+
+    test('voice が無い古い設定は VOICEVOX の指定として読む', async () => {
+      setFixture('<article><p>互換性のテストです。</p></article>');
+      window.__storedSettings = { speakerId: 5, speed: 1, volume: 100 };
+
+      api.setSynthesizeSpeechOverride(async () => new ArrayBuffer(8));
+      api.setPlayAudioOverride(async () => 'ended');
+      await api.startReading();
+
+      const state = api.getState();
+      assert(state.voice.engine === 'voicevox', `VOICEVOX として扱われていません: ${JSON.stringify(state.voice)}`);
+      assert(state.speakerId === 5, `話者IDが引き継がれていません: ${state.speakerId}`);
     });
 
     (async () => {

@@ -23,6 +23,7 @@ let playbackToken = 0;
 let finishCurrentAudio = null;
 let synthesizeSpeechOverride = null;
 let playAudioOverride = null;
+let speakerOverride = null;
 let extractedTextCache = null;
 let floatingPanelDragCleanup = null;
 let noticeElement = null;
@@ -35,7 +36,13 @@ const NOTICE_DURATION_MS = 6000;
 
 // 再生設定は chrome.storage.local を唯一の情報源とし、popup と content で共有する。
 // volume は popup のスライダーの単位に合わせて 0〜100 で保存されている。
-const PLAYBACK_SETTING_KEYS = ['speakerId', 'speed', 'volume'];
+// speakerId は voice を導入する前の設定。互換のために読むだけで、書き込みはしない。
+const PLAYBACK_SETTING_KEYS = ['voice', 'speakerId', 'speed', 'volume'];
+
+// 選んでいる声。'voicevox:<話者ID>' または 'system:<voiceURI>' を分解した形
+let selectedVoice = { engine: 'voicevox', id: '0' };
+// Windows 標準音声を使うときの声の識別子
+let systemVoiceURI = '';
 
 // メッセージリスナー
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -121,9 +128,21 @@ async function loadPlaybackSettings() {
 
 // 再生設定を取り込む。値が欠けている項目は現在値を保つ
 function applyPlaybackSettings(values) {
-  const parsedSpeakerId = toFiniteNumber(values.speakerId);
-  if (parsedSpeakerId !== null) {
-    speakerId = parsedSpeakerId;
+  // voice が無い場合は、以前の設定（speakerId）を VOICEVOX の指定とみなす
+  const voice = parseVoice(values.voice) ||
+    (values.speakerId !== undefined ? { engine: 'voicevox', id: String(values.speakerId) } : null);
+
+  if (voice) {
+    selectedVoice = voice;
+
+    if (voice.engine === 'system') {
+      systemVoiceURI = voice.id;
+    } else {
+      const parsedId = toFiniteNumber(voice.id);
+      if (parsedId !== null) {
+        speakerId = parsedId;
+      }
+    }
   }
 
   const parsedSpeed = toFiniteNumber(values.speed);
@@ -136,24 +155,34 @@ function applyPlaybackSettings(values) {
     volume = Math.min(1, Math.max(0, parsedVolume / 100));
   }
 
-  applyPlaybackSettingsToCurrentAudio();
+  // 進行中の読み上げへ、反映できる範囲で即時反映する。
+  // 何をどこまで反映できるかは読み上げ方式によって違うので、実装側に任せる。
+  currentSpeaker.applySettings();
 }
 
-// 再生中の音声へ、いま反映できる設定だけを適用する。
-// 音量はそのまま反映できる。
-// 速度は合成時の speedScale で決まっているため、再生レートの比で近似し、
-// 本来の速度は次の文の合成から反映される。
-// 話者は合成済みの音声には反映できないため、次の文から切り替わる。
-function applyPlaybackSettingsToCurrentAudio() {
-  if (!currentAudio) {
-    return;
+// 'voicevox:2' や 'system:Microsoft Zira' を分解する
+function parseVoice(value) {
+  if (typeof value !== 'string' || value === '') {
+    return null;
   }
 
-  currentAudio.volume = volume;
-
-  if (currentAudioSpeed > 0) {
-    currentAudio.playbackRate = speed / currentAudioSpeed;
+  const separator = value.indexOf(':');
+  if (separator < 0) {
+    return null;
   }
+
+  const engine = value.slice(0, separator);
+  const id = value.slice(separator + 1);
+  return (engine === 'voicevox' || engine === 'system') ? { engine, id } : null;
+}
+
+// 選んだ声に対応する読み上げ方式を返す
+function speakerFor(voice) {
+  if (speakerOverride) {
+    return speakerOverride;
+  }
+
+  return voice && voice.engine === 'system' ? systemSpeaker : voicevoxSpeaker;
 }
 
 // storage には文字列で保存されている場合があるため、数値として解釈できるときだけ返す
@@ -176,8 +205,11 @@ async function startReading({ selectionOnly = false } = {}) {
 
   console.log('[VOICEVOX Reader] 読み上げ開始');
 
-  const voicevoxReady = await ensureVoicevoxAvailable();
-  if (!voicevoxReady) {
+  // 選んでいる声から方式を決める。ここでは何も鳴っていないので差し替えて安全
+  await loadPlaybackSettings();
+  currentSpeaker = speakerFor(selectedVoice);
+
+  if (!await currentSpeaker.ensureReady()) {
     return;
   }
 
@@ -246,11 +278,9 @@ function pauseReading() {
 
   isPaused = true;
 
-  if (currentAudio) {
-    // 再生中の音声はそのまま一時停止し、同じ位置から再開できるようにする
-    currentAudio.pause();
-  } else {
-    // 音声合成中の一時停止：進行中の処理を無効化し、再開時に現在の文を読み直す
+  if (!currentSpeaker.pause()) {
+    // その場で止められない方式・状況では、進行中の処理を無効化し、
+    // 再開時に現在の文を読み直す
     playbackToken++;
   }
 
@@ -267,22 +297,13 @@ function resumeReading() {
   isPaused = false;
   claimPlayback();
 
-  if (currentAudio) {
-    // 一時停止していた音声を続きから再生する（読み直さない）
-    // 一時停止中に変更された音量と速度を反映してから再開する
-    applyPlaybackSettingsToCurrentAudio();
-    notifyStatusChange();
-    currentAudio.play().catch(error => {
-      // 停止・スキップで再生開始が中断されたときの AbortError は正常系なので無視する
-      if (error && error.name === 'AbortError') {
-        return;
-      }
-      console.error('[VOICEVOX Reader] 再開エラー:', error);
-    });
-  } else {
-    // 合成中に一時停止していた場合は現在の文を読み直す
+  // 一時停止中に変更された音量と速度も、この中で反映される
+  const resumed = currentSpeaker.resume();
+  notifyStatusChange();
+
+  if (!resumed) {
+    // 続きから再開できない方式・状況では、現在の文を読み直す
     const token = ++playbackToken;
-    notifyStatusChange();
     readNextSentence(token);
   }
 }
@@ -293,7 +314,7 @@ function stopReading() {
   isPlaying = false;
   isPaused = false;
   playbackToken++;
-  interruptCurrentAudio();
+  currentSpeaker.stop();
 
   removeHighlight();
   notifyStatusChange();
@@ -305,7 +326,7 @@ function skipToPrevious() {
     console.log('[VOICEVOX Reader] 前の文章へスキップ');
 
     playbackToken++;
-    interruptCurrentAudio();
+    currentSpeaker.stop();
 
     currentIndex--;
     notifyStatusChange(); // 先にステータス更新
@@ -325,7 +346,7 @@ function skipToNext() {
     console.log('[VOICEVOX Reader] 次の文章へスキップ');
 
     playbackToken++;
-    interruptCurrentAudio();
+    currentSpeaker.stop();
 
     currentIndex++;
     notifyStatusChange(); // 先にステータス更新
@@ -627,19 +648,12 @@ async function readNextSentence(token = playbackToken) {
   highlightSentence(sentence);
 
   try {
-    // 音声合成
-    console.log('[VOICEVOX Reader] 音声合成開始...');
-    // 合成に使った速度を控える。再生中に速度が変わったとき、再生レートの補正に必要になる
-    const synthesisSpeed = speed;
-    const audioData = await synthesizeSpeech(sentence);
-    console.log('[VOICEVOX Reader] 音声合成完了');
+    // 声の変更は次の文から反映する。ここでは前の文が鳴り終わっているので差し替えて安全
+    currentSpeaker = speakerFor(selectedVoice);
 
-    if (token !== playbackToken || !isPlaying || isPaused) return;
-
-    // 音声再生
-    console.log('[VOICEVOX Reader] 音声再生開始...');
-    const playResult = await playAudio(audioData, synthesisSpeed);
-    console.log('[VOICEVOX Reader] 音声再生完了');
+    const playResult = await currentSpeaker.speak(sentence, {
+      shouldContinue: () => token === playbackToken && isPlaying && !isPaused
+    });
 
     if (playResult !== 'ended' || token !== playbackToken || !isPlaying || isPaused) return;
 
@@ -697,21 +711,6 @@ function removeNotice() {
   }
 }
 
-async function ensureVoicevoxAvailable() {
-  try {
-    const response = await chrome.runtime.sendMessage({ action: 'checkVoicevoxStatus' });
-    if (response && response.success && response.available) {
-      return true;
-    }
-  } catch (error) {
-    console.error('[VOICEVOX Reader] VOICEVOX状態確認失敗:', error);
-  }
-
-  // 再確認ダイアログは設けない。起動後にもう一度再生を押せば同じ経路を通るため。
-  showNotice('VOICEVOXが起動していません。起動してから、もう一度再生してください。');
-  return false;
-}
-
 // VOICEVOXで音声合成
 async function synthesizeSpeech(text) {
   if (synthesizeSpeechOverride) {
@@ -759,6 +758,219 @@ function base64ToArrayBuffer(base64) {
   return bytes.buffer;
 }
 
+// 読み上げ方式の共通の窓口。
+// 再生・一時停止・スキップの制御は、この窓口だけを見る。方式ごとの違いは
+// 実装の中に閉じるので、方式を増やしても制御側は変わらない。
+//
+//   ensureReady   読み上げられる状態か確かめる。だめなら理由を通知して false
+//   speak         1文を読み上げ、'ended'（読み終えた）か 'interrupted'（中断）を返す
+//   pause         その場で止められたら true。false なら再開時に同じ文を読み直す
+//   resume        続きから再開できたら true。false なら読み直しが必要
+//   stop          進行中の読み上げを中断する
+//   applySettings 進行中の読み上げへ、反映できる範囲で音量と速度を反映する
+const voicevoxSpeaker = {
+  async ensureReady() {
+    try {
+      const response = await chrome.runtime.sendMessage({ action: 'checkVoicevoxStatus' });
+      if (response && response.success && response.available) {
+        return true;
+      }
+    } catch (error) {
+      console.error('[VOICEVOX Reader] VOICEVOX状態確認失敗:', error);
+    }
+
+    // 再確認ダイアログは設けない。起動後にもう一度再生を押せば同じ経路を通るため。
+    showNotice('VOICEVOXが起動していません。起動してから、もう一度再生してください。');
+    return false;
+  },
+
+  async speak(text, { shouldContinue }) {
+    console.log('[VOICEVOX Reader] 音声合成開始...');
+    // 合成に使った速度を控える。再生中に速度が変わったとき、再生レートの補正に必要になる
+    const synthesisSpeed = speed;
+    const audioData = await synthesizeSpeech(text);
+    console.log('[VOICEVOX Reader] 音声合成完了');
+
+    // 合成のあいだに停止やスキップが入っていれば、鳴らさずに終える
+    if (!shouldContinue()) {
+      return 'interrupted';
+    }
+
+    console.log('[VOICEVOX Reader] 音声再生開始...');
+    const result = await playAudio(audioData, synthesisSpeed);
+    console.log('[VOICEVOX Reader] 音声再生完了');
+    return result;
+  },
+
+  pause() {
+    if (!currentAudio) {
+      // 合成中で音がまだない。その場では止められない
+      return false;
+    }
+
+    currentAudio.pause();
+    return true;
+  },
+
+  resume() {
+    if (!currentAudio) {
+      return false;
+    }
+
+    this.applySettings();
+    currentAudio.play().catch(error => {
+      // 停止・スキップで再生開始が中断されたときの AbortError は正常系なので無視する
+      if (error && error.name === 'AbortError') {
+        return;
+      }
+      console.error('[VOICEVOX Reader] 再開エラー:', error);
+    });
+    return true;
+  },
+
+  stop() {
+    if (finishCurrentAudio) {
+      finishCurrentAudio();
+      return;
+    }
+
+    if (currentAudio) {
+      currentAudio.pause();
+      currentAudio = null;
+    }
+  },
+
+  applySettings() {
+    if (!currentAudio) {
+      return;
+    }
+
+    currentAudio.volume = volume;
+
+    // 速度は合成時の speedScale で決まっているため、再生レートの比で近似し、
+    // 本来の速度は次の文の合成から反映される
+    if (currentAudioSpeed > 0) {
+      currentAudio.playbackRate = speed / currentAudioSpeed;
+    }
+  }
+};
+
+// Windows 標準（OS 内蔵）の音声で読み上げる方式。
+// VOICEVOX と違い「合成してから鳴らす」の2段階ではなく、speak で最後まで行う。
+// そのため音量と速度は発話の開始時にしか決められず、途中では変えられない。
+let currentUtterance = null;
+
+const systemSpeaker = {
+  async ensureReady() {
+    if (!window.speechSynthesis) {
+      showNotice('このブラウザでは標準音声を利用できません。');
+      return false;
+    }
+
+    if (findSystemVoice() === null) {
+      showNotice('選択した音声が見つかりません。読み上げモデルを選び直してください。');
+      return false;
+    }
+
+    return true;
+  },
+
+  speak(text, { shouldContinue }) {
+    return new Promise((resolve, reject) => {
+      if (!shouldContinue()) {
+        resolve('interrupted');
+        return;
+      }
+
+      const utterance = new SpeechSynthesisUtterance(text);
+      const voice = findSystemVoice();
+      if (voice) {
+        utterance.voice = voice;
+        utterance.lang = voice.lang;
+      }
+      utterance.rate = speed;
+      utterance.volume = volume;
+
+      let settled = false;
+      const finish = (result, error) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        if (currentUtterance === utterance) {
+          currentUtterance = null;
+        }
+        if (error) {
+          reject(error);
+        } else {
+          resolve(result);
+        }
+      };
+
+      utterance.onend = () => finish('ended');
+      utterance.onerror = (event) => {
+        // stop() の cancel による終了は中断であって異常ではない
+        if (event.error === 'canceled' || event.error === 'interrupted') {
+          finish('interrupted');
+          return;
+        }
+        finish(null, new Error(`標準音声の読み上げに失敗しました (${event.error})`));
+      };
+
+      currentUtterance = utterance;
+      window.speechSynthesis.speak(utterance);
+    });
+  },
+
+  pause() {
+    if (!currentUtterance) {
+      return false;
+    }
+
+    window.speechSynthesis.pause();
+    return true;
+  },
+
+  resume() {
+    if (!currentUtterance) {
+      return false;
+    }
+
+    window.speechSynthesis.resume();
+    return true;
+  },
+
+  stop() {
+    if (!currentUtterance) {
+      return;
+    }
+
+    // cancel は onend か onerror を呼ぶので、speak の Promise はそこで解決される
+    window.speechSynthesis.cancel();
+  },
+
+  applySettings() {
+    // 発話の途中では音量も速度も変えられない。次の文から反映される
+  }
+};
+
+// 選んでいる声に対応する SpeechSynthesisVoice を探す
+function findSystemVoice() {
+  if (!window.speechSynthesis) {
+    return null;
+  }
+
+  const voices = window.speechSynthesis.getVoices();
+  if (!voices || voices.length === 0) {
+    return null;
+  }
+
+  return voices.find(voice => voice.voiceURI === systemVoiceURI) || null;
+}
+
+// いま使っている読み上げ方式
+let currentSpeaker = voicevoxSpeaker;
+
 // 音声を再生
 function playAudio(audioData, synthesisSpeed = speed) {
   if (playAudioOverride) {
@@ -778,7 +990,7 @@ function playAudio(audioData, synthesisSpeed = speed) {
     const audio = new Audio(url);
     currentAudio = audio;
     currentAudioSpeed = synthesisSpeed;
-    applyPlaybackSettingsToCurrentAudio();
+    voicevoxSpeaker.applySettings();
     let settled = false;
 
     const finish = (result, error) => {
@@ -825,18 +1037,6 @@ function playAudio(audioData, synthesisSpeed = speed) {
       finish(null, error);
     });
   });
-}
-
-function interruptCurrentAudio() {
-  if (finishCurrentAudio) {
-    finishCurrentAudio();
-    return;
-  }
-
-  if (currentAudio) {
-    currentAudio.pause();
-    currentAudio = null;
-  }
 }
 
 // 文章をハイライト表示
@@ -1196,6 +1396,13 @@ if (window.__VOICEVOX_READER_ENABLE_TEST_HOOKS__) {
     removeHighlight,
     startReading,
     stopReading,
+    pauseReading,
+    resumeReading,
+    // 読み上げ方式を差し替える。null で既定（選んだ声に対応する方式）へ戻す
+    setSpeaker: (speaker) => {
+      speakerOverride = speaker;
+      currentSpeaker = speaker || voicevoxSpeaker;
+    },
     getState: () => ({
       isPlaying,
       isPaused,
@@ -1204,7 +1411,8 @@ if (window.__VOICEVOX_READER_ENABLE_TEST_HOOKS__) {
       sentences: [...sentences],
       speakerId,
       speed,
-      volume
+      volume,
+      voice: { ...selectedVoice }
     }),
     setSynthesizeSpeechOverride: (fn) => {
       synthesizeSpeechOverride = fn;
