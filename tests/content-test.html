@@ -23,10 +23,13 @@
     // chrome.storage.local の中身と、登録された onChanged リスナー
     window.__storedSettings = { floatingPanelEnabled: false };
     window.__storageListeners = [];
+    // content が送ったメッセージの種類を記録する
+    window.__sentActions = [];
     window.chrome = {
       runtime: {
         onMessage: { addListener() {} },
         sendMessage(message) {
+          window.__sentActions.push(message.action);
           if (message.action === 'checkVoicevoxStatus') {
             return Promise.resolve({ success: true, available: window.__voicevoxAvailable });
           }
@@ -89,7 +92,7 @@
 
     function setFixture(html) {
       api.stopReading();
-      api.toggleFloatingPanel(false);
+      api.hideFloatingPanel();
       fixture.innerHTML = html;
       window.__voicevoxAvailable = true;
       window.__storedSettings = { floatingPanelEnabled: false };
@@ -358,7 +361,7 @@
 
     test('フローティングパネルの閉じるボタンは読み上げ中は使えない', async () => {
       setFixture('<article><p>閉じるボタンのテストです。</p></article>');
-      api.toggleFloatingPanel(true);
+      api.showFloatingPanel();
 
       const panel = document.getElementById('voicevox-reader-floating-panel');
       assert(panel, 'フローティングパネルが表示されていません');
@@ -380,10 +383,10 @@
       assert(!closeBtn.disabled, '読み上げ終了後に閉じるボタンが有効へ戻っていません');
     });
 
-    test('閉じるボタンでパネルを閉じると設定にも反映される', () => {
+    test('閉じるボタンでパネルを閉じる。設定は持たない', () => {
       setFixture('<article><p>閉じる操作のテストです。</p></article>');
-      window.__storedSettings.floatingPanelEnabled = true;
-      api.toggleFloatingPanel(true);
+      window.__storedSettings = { floatingPanelEnabled: false };
+      api.showFloatingPanel();
 
       const panel = document.getElementById('voicevox-reader-floating-panel');
       assert(panel, 'フローティングパネルが表示されていません');
@@ -391,34 +394,22 @@
       panel.querySelector('.vr-panel-close').click();
 
       assert(!document.getElementById('voicevox-reader-floating-panel'), 'パネルが閉じていません');
-      assert(window.__storedSettings.floatingPanelEnabled === false, '設定に反映されていません');
+      assert(!('floatingPanelEnabled' in window.__storedSettings) ||
+        window.__storedSettings.floatingPanelEnabled === false,
+        'パネルの表示状態を storage へ書いています（状態を持たない設計に反します）');
     });
 
-    test('注入済みのタブでも、設定の変更でパネルの表示が切り替わる', () => {
-      setFixture('<article><p>パネル追従のテストです。</p></article>');
-      const notify = (changes) => {
-        window.__storageListeners.forEach(listener => listener(changes, 'local'));
-      };
+    test('表示中に再度表示しても二重にならない', () => {
+      setFixture('<article><p>二重表示のテストです。</p></article>');
+      api.showFloatingPanel();
+      api.showFloatingPanel();
 
-      // 復元処理は注入時にしか走らない。すでに注入済みの状態を想定する
-      assert(!document.getElementById('voicevox-reader-floating-panel'), '前提としてパネルは非表示のはずです');
-
-      notify({ floatingPanelEnabled: { newValue: true } });
-      assert(document.getElementById('voicevox-reader-floating-panel'), '設定を有効にしてもパネルが表示されません');
-
-      notify({ floatingPanelEnabled: { newValue: false } });
-      assert(!document.getElementById('voicevox-reader-floating-panel'), '設定を無効にしてもパネルが消えません');
-
-      // local 以外の領域は無視する
-      notify({ floatingPanelEnabled: { newValue: true } });
-      window.__storageListeners.forEach(listener => listener({ floatingPanelEnabled: { newValue: false } }, 'sync'));
-      assert(document.getElementById('voicevox-reader-floating-panel'), 'local 以外の領域の変更を取り込んでいます');
+      const panels = document.querySelectorAll('#voicevox-reader-floating-panel');
+      assert(panels.length === 1, `パネルが ${panels.length} 個あります`);
     });
 
-    test('右クリック読み上げでは、設定が無効でも操作パネルを表示し設定も揃える', async () => {
+    test('右クリック読み上げでは操作パネルを自動表示する', async () => {
       setFixture('<article><p id="s1">右クリック読み上げのテストです。</p></article>');
-      // パネルは無効。従来はこの状態だとパネルが出なかった
-      window.__storedSettings.floatingPanelEnabled = false;
       assert(!document.getElementById('voicevox-reader-floating-panel'), '前提としてパネルは非表示のはずです');
 
       api.setSynthesizeSpeechOverride(async () => new ArrayBuffer(8));
@@ -433,12 +424,24 @@
       selection.addRange(range);
 
       // background から playSelection を受け取ったときと同じ経路を通す
-      api.enableFloatingPanel();
+      api.showFloatingPanel();
       await api.startReading({ selectionOnly: true });
 
       assert(document.getElementById('voicevox-reader-floating-panel'), '操作パネルが表示されていません');
-      assert(window.__storedSettings.floatingPanelEnabled === true,
-        `表示設定が有効になっていません: ${window.__storedSettings.floatingPanelEnabled}`);
+    });
+
+    test('読み上げ開始時に他タブの停止を要求し、状態通知は1通にまとめる', async () => {
+      setFixture('<article><p>単一タブ読み上げのテストです。</p></article>');
+      api.setSynthesizeSpeechOverride(async () => new ArrayBuffer(8));
+      api.setPlayAudioOverride(async () => 'ended');
+      window.__sentActions = [];
+
+      await api.startReading();
+
+      assert(window.__sentActions.includes('claimPlayback'), '他タブの停止を要求していません');
+      assert(window.__sentActions.includes('statusUpdate'), '状態通知が送られていません');
+      assert(!window.__sentActions.includes('updateIcon'),
+        'updateIcon が残っています（statusUpdate と二重になります）');
     });
 
     (async () => {

@@ -62,16 +62,6 @@ h1 {
   border-color: #667eea;
 }
 
-.btn-toggle.active {
-  background: #667eea;
-  border-color: #667eea;
-  color: white;
-}
-
-.btn-toggle.active svg path {
-  fill: white;
-}
-
 .controls {
   display: flex;
   justify-content: center;

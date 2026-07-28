@@ -52,9 +52,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case 'playSelection':
       // コンテキストメニューから呼ばれる。項目名のとおり選択範囲だけを読む。
       // この経路ではポップアップが開いていないため、操作パネルを出さないと
-      // 停止も一時停止もできなくなる。設定の値によらず表示する。
-      enableFloatingPanel();
+      // 停止も一時停止もできなくなる。
+      showFloatingPanel();
       startReading({ selectionOnly: true });
+      sendResponse({ success: true });
+      break;
+    case 'showFloatingPanel':
+      // ポップアップの表示ボタンから呼ばれる。すでに出ていれば何もしない
+      showFloatingPanel();
       sendResponse({ success: true });
       break;
     case 'pause':
@@ -81,10 +86,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         totalSentences: sentences.length
       });
       break;
-    case 'toggleFloatingPanel':
-      toggleFloatingPanel(message.enabled);
-      sendResponse({ success: true });
-      break;
   }
   // すべてのケースで同期的に sendResponse 済みのため、応答ポートを開いたままにしない
 });
@@ -106,12 +107,6 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
     applyPlaybackSettings(changedSettings);
   }
 
-  // パネルの表示設定も追従させる。
-  // 復元処理は content script の注入時にしか走らないため、これがないと
-  // 「すでに注入済みのタブ」では設定を変えてもパネルが現れない。
-  if (changes.floatingPanelEnabled) {
-    toggleFloatingPanel(changes.floatingPanelEnabled.newValue === true);
-  }
 });
 
 // 保存済みの再生設定を読み込んで反映する
@@ -233,6 +228,8 @@ async function startReading({ selectionOnly = false } = {}) {
 
   console.log('[VOICEVOX Reader] 最初の文章:', sentences[currentIndex]);
 
+  claimPlayback();
+
   isPlaying = true;
   isPaused = false;
   const token = ++playbackToken;
@@ -268,6 +265,7 @@ function resumeReading() {
   }
 
   isPaused = false;
+  claimPlayback();
 
   if (currentAudio) {
     // 一時停止していた音声を続きから再生する（読み直さない）
@@ -991,6 +989,8 @@ function removeHighlight() {
 function notifyStatusChange() {
   // sendMessage は Promise を返すため、受信側（ポップアップ）が閉じているときの
   // rejection は .catch で無視する必要がある。同期 try/catch では捕捉できない。
+  // この1通がポップアップと background の両方へ届く。
+  // background はこれを見てツールバーのアイコンを更新する。
   chrome.runtime.sendMessage({
     action: 'statusUpdate',
     isPlaying: isPlaying,
@@ -999,32 +999,13 @@ function notifyStatusChange() {
     totalSentences: sentences.length
   }).catch(() => {});
 
-  // アイコンの更新
-  chrome.runtime.sendMessage({
-    action: 'updateIcon',
-    isPlaying: isPlaying,
-    isPaused: isPaused
-  }).catch(() => {});
-
   // フローティングパネルの更新
   updateFloatingPanelState();
 }
 
-// フローティングパネルのトグル
-function toggleFloatingPanel(enabled) {
-  if (enabled) {
-    showFloatingPanel();
-  } else {
-    hideFloatingPanel();
-  }
-}
-
-// パネルを表示し、表示設定にも反映する。
-// 表示だけして設定を変えないと、ポップアップのトグルが消灯したまま
-// パネルだけが見えている状態になり、トグルを押しても見た目が変わらない。
-function enableFloatingPanel() {
-  showFloatingPanel();
-  chrome.storage.local.set({ floatingPanelEnabled: true });
+// 読み上げは常に1タブだけにする。開始・再開のたびに他のタブへ停止を促す
+function claimPlayback() {
+  chrome.runtime.sendMessage({ action: 'claimPlayback' }).catch(() => {});
 }
 
 // フローティングパネルを表示
@@ -1097,11 +1078,7 @@ function showFloatingPanel() {
   panel.querySelector('.vr-btn-prev').addEventListener('click', skipToPrevious);
   panel.querySelector('.vr-btn-next').addEventListener('click', skipToNext);
 
-  panel.querySelector('.vr-panel-close').addEventListener('click', () => {
-    hideFloatingPanel();
-    // 次にページを開いたときに復活しないよう、設定にも反映する
-    chrome.storage.local.set({ floatingPanelEnabled: false });
-  });
+  panel.querySelector('.vr-panel-close').addEventListener('click', hideFloatingPanel);
 
   // ドラッグ機能
   makeDraggable(panel);
@@ -1208,20 +1185,13 @@ function makeDraggable(element) {
   };
 }
 
-// ページ読み込み時にフローティングパネルの状態を復元
-chrome.storage.local.get(['floatingPanelEnabled'], (result) => {
-  if (result.floatingPanelEnabled) {
-    showFloatingPanel();
-  }
-});
-
 if (window.__VOICEVOX_READER_ENABLE_TEST_HOOKS__) {
   window.__VOICEVOX_READER_TESTS__ = {
     extractMainContent,
     splitIntoSentences,
     spansMultipleSentences,
-    toggleFloatingPanel,
-    enableFloatingPanel,
+    showFloatingPanel,
+    hideFloatingPanel,
     highlightSentence,
     removeHighlight,
     startReading,

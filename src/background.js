@@ -27,12 +27,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ success: false, available: false, error: error.message });
       });
     return true;
-  } else if (message.action === 'updateIcon') {
+  } else if (message.action === 'statusUpdate') {
+    // statusUpdate はポップアップにも同時に届く。
+    // アイコン更新のために同じ内容をもう一通送る必要はない。
     updateIcon(message.isPlaying, message.isPaused, sender.tab?.id);
-    sendResponse({ success: true });
-    return true;
+  } else if (message.action === 'claimPlayback') {
+    stopPlaybackInOtherTabs(sender.tab?.id);
   }
 });
+
+// 読み上げは常に1タブだけにする。
+// 複数のタブが同時に鳴ると音声が重なり、どのタブが再生中かも分からなくなる。
+async function stopPlaybackInOtherTabs(activeTabId) {
+  const tabs = await chrome.tabs.query({});
+
+  await Promise.all(
+    tabs
+      .filter(tab => tab.id !== undefined && tab.id !== activeTabId)
+      // content script が入っていないタブでは失敗する。想定内なので無視する
+      .map(tab => chrome.tabs.sendMessage(tab.id, { action: 'stop' }).catch(() => {}))
+  );
+}
 
 // 選択したテキストをその場で読み上げるためのコンテキストメニュー。
 // contexts: ['selection'] により、テキストを選択しているときだけ項目が現れる。

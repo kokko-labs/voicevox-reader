@@ -5,7 +5,7 @@
   "private": true,
   "license": "MIT",
   "scripts": {
-    "test": "node tests/run-content-tests.js",
+    "test": "node tests/run-content-tests.js && node tests/run-popup-tests.js",
     "build": "node scripts/build.js",
     "package": "node scripts/build.js --zip"
   },

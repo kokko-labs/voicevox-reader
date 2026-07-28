@@ -13,14 +13,20 @@ const volumeRange = document.getElementById('volumeRange');
 const volumeValue = document.getElementById('volumeValue');
 const statusText = document.getElementById('status');
 const errorMessage = document.getElementById('errorMessage');
-const toggleFloatingBtn = document.getElementById('toggleFloatingBtn');
+const showPanelBtn = document.getElementById('showPanelBtn');
+
+// このポップアップが対象とするタブ。
+// 状態通知はどのタブからでも届くため、対象を覚えておいて選り分ける。
+let targetTabId = null;
 
 // 初期化
 document.addEventListener('DOMContentLoaded', async () => {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  targetTabId = tab && tab.id !== undefined ? tab.id : null;
+
   await loadSpeakers();
   await loadSettings();
   await updateStatus();
-  await updateFloatingButtonState();
 });
 
 // スピーカー一覧を取得できているか（VOICEVOX 起動後の読み直し要否の判定に使う）
@@ -55,7 +61,7 @@ async function loadSpeakers() {
 
 // 設定を読み込み
 async function loadSettings() {
-  const settings = await chrome.storage.local.get(['speakerId', 'speed', 'volume', 'floatingPanelEnabled']);
+  const settings = await chrome.storage.local.get(['speakerId', 'speed', 'volume']);
   
   if (settings.speakerId !== undefined) {
     speakerSelect.value = settings.speakerId;
@@ -145,9 +151,9 @@ playBtn.addEventListener('click', async () => {
   await saveSettings();
 
   try {
+    // 状態は content 側から statusUpdate で届く。
+    // ここで問い合わせると、まだ再生が始まっていない古い値で上書きしてしまう。
     await sendToActiveTab({ action: 'play' });
-
-    await updateStatus();
     hideError();
   } catch (error) {
     showError('ページとの通信に失敗しました。ページを再読み込みしてください。');
@@ -233,8 +239,8 @@ nextBtn.addEventListener('click', async () => {
 
 async function sendPlaybackCommand(action) {
   try {
+    // 再生ボタンと同じ理由で、送るだけにする。表示は statusUpdate で更新される
     await sendToActiveTab({ action });
-    await updateStatus();
   } catch (error) {
     showError('ページとの通信に失敗しました。');
   }
@@ -259,33 +265,16 @@ volumeRange.addEventListener('change', saveSettings);
 speakerSelect.addEventListener('change', saveSettings);
 
 // フローティングパネルトグル
-toggleFloatingBtn.addEventListener('click', async () => {
-  const settings = await chrome.storage.local.get(['floatingPanelEnabled']);
-  const newState = !settings.floatingPanelEnabled;
-  
-  await chrome.storage.local.set({ floatingPanelEnabled: newState });
-  
+// パネルを出すだけのボタン。閉じるのはパネルの × に任せる。
+// 状態を持たせないので、ボタンの見た目と実際の表示がずれる余地がない。
+showPanelBtn.addEventListener('click', async () => {
   try {
-    await sendToActiveTab({
-      action: 'toggleFloatingPanel',
-      enabled: newState
-    });
-    
-    updateFloatingButtonState();
+    await sendToActiveTab({ action: 'showFloatingPanel' });
+    hideError();
   } catch (error) {
     showError('ページとの通信に失敗しました。ページを再読み込みしてください。');
   }
 });
-
-// フローティングボタンの状態を更新
-async function updateFloatingButtonState() {
-  const settings = await chrome.storage.local.get(['floatingPanelEnabled']);
-  if (settings.floatingPanelEnabled) {
-    toggleFloatingBtn.classList.add('active');
-  } else {
-    toggleFloatingBtn.classList.remove('active');
-  }
-}
 
 // エラー表示
 function showError(message) {
@@ -299,7 +288,15 @@ function hideError() {
 
 // コンテンツスクリプトからのメッセージを受信
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.action === 'statusUpdate') {
-    updateUIState(message);
+  if (message.action !== 'statusUpdate') {
+    return;
   }
+
+  // 読み上げ開始時に他タブを停止させるため、他タブからも「停止した」という
+  // 通知が届く。これを取り込むと、再生中なのに停止中の表示になってしまう。
+  if (targetTabId !== null && sender.tab && sender.tab.id !== targetTabId) {
+    return;
+  }
+
+  updateUIState(message);
 });
