@@ -21,14 +21,25 @@ let targetTabId = null;
 
 // 初期化
 document.addEventListener('DOMContentLoaded', async () => {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  targetTabId = tab && tab.id !== undefined ? tab.id : null;
-
-  await loadSpeakers();
+  // OS 標準の音声は VOICEVOX と無関係なので先に出す。
+  // まとめて待つと、エンジンが起動していないときに一覧が空のままになる。
+  speakerSelect.innerHTML = '';
+  appendSystemVoices();
   watchSystemVoices();
   await loadSettings();
-  await updateStatus();
+
+  // 以降は待たせてよいもの
+  await Promise.all([
+    loadVoicevoxSpeakers().then(loadSettings),
+    resolveTargetTab().then(updateStatus)
+  ]);
 });
+
+// このポップアップが対象とするタブを決める
+async function resolveTargetTab() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  targetTabId = tab && tab.id !== undefined ? tab.id : null;
+}
 
 // スピーカー一覧を取得できているか（VOICEVOX 起動後の読み直し要否の判定に使う）
 let speakersLoaded = false;
@@ -36,24 +47,23 @@ let speakersLoaded = false;
 // 読み上げモデルの一覧を作る。
 // 値は 'voicevox:<話者ID>' または 'system:<voiceURI>' の形で、
 // content 側はこれだけを見て読み上げ方式を決める。
-async function loadSpeakers() {
-  speakerSelect.innerHTML = '';
+async function loadVoicevoxSpeakers() {
+  const group = document.createElement('optgroup');
+  group.label = 'VOICEVOX';
+  group.dataset.voicevox = 'true';
 
   try {
-    const response = await fetch(`${VOICEVOX_URL}/speakers`);
+    // エンジンが応答しないときに待ち続けないよう、上限を設ける
+    const response = await fetch(`${VOICEVOX_URL}/speakers`, { signal: AbortSignal.timeout(3000) });
     if (!response.ok) throw new Error('VOICEVOX APIに接続できません');
 
     const speakers = await response.json();
-    const group = document.createElement('optgroup');
-    group.label = 'VOICEVOX';
-
     speakers.forEach(speaker => {
       speaker.styles.forEach(style => {
         group.appendChild(createVoiceOption(`voicevox:${style.id}`, `${speaker.name} (${style.name})`));
       });
     });
 
-    speakerSelect.appendChild(group);
     speakersLoaded = true;
     hideError();
   } catch (error) {
@@ -62,13 +72,12 @@ async function loadSpeakers() {
     // ここではエラーを出さない。OS 標準の音声だけを使うこともあり、
     // ポップアップを開いただけで警告を出すのは過剰なため。
     // VOICEVOX の音声で再生したときに、起動確認から案内が出る。
-    const group = document.createElement('optgroup');
-    group.label = 'VOICEVOX';
     group.appendChild(createVoiceOption('', '取得不可（エンジン未起動）'));
-    speakerSelect.appendChild(group);
   }
 
-  appendSystemVoices();
+  // 先に出した OS 標準の音声より前に差し込む
+  speakerSelect.querySelectorAll('optgroup[data-voicevox]').forEach(old => old.remove());
+  speakerSelect.insertBefore(group, speakerSelect.firstChild);
 }
 
 // Windows などOSに入っている音声。英語の読み上げに使える。
@@ -265,9 +274,9 @@ async function ensureVoicevoxReady() {
     return false;
   }
 
-  // VOICEVOX の起動前にポップアップを開いていた場合、話者一覧が「接続エラー」のままなので読み直す
+  // VOICEVOX の起動前にポップアップを開いていた場合、一覧が「取得不可」のままなので読み直す
   if (!speakersLoaded) {
-    await loadSpeakers();
+    await loadVoicevoxSpeakers();
     await loadSettings();
   }
 

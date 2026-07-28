@@ -33,16 +33,21 @@
       this.onend = null;
       this.onerror = null;
     };
-    window.speechSynthesis = {
-      getVoices: () => [{ voiceURI: 'TestVoice', name: 'Test Voice', lang: 'en-US' }],
-      speak(utterance) {
-        window.__systemSpoken.push(utterance.text);
-        setTimeout(() => { if (utterance.onend) { utterance.onend(); } }, 0);
-      },
-      cancel() {},
-      pause() {},
-      resume() {}
-    };
+    // ブラウザでは window.speechSynthesis が読み取り専用のため、代入では差し替わらない。
+    // 本物が使われると実際に発話してしまい、テストも成立しない。
+    Object.defineProperty(window, 'speechSynthesis', {
+      configurable: true,
+      value: {
+        getVoices: () => [{ voiceURI: 'TestVoice', name: 'Test Voice', lang: 'en-US' }],
+        speak(utterance) {
+          window.__systemSpoken.push(utterance.text);
+          setTimeout(() => { if (utterance.onend) { utterance.onend(); } }, 0);
+        },
+        cancel() {},
+        pause() {},
+        resume() {}
+      }
+    });
     window.chrome = {
       runtime: {
         onMessage: { addListener() {} },

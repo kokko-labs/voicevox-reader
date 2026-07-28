@@ -20,6 +20,7 @@ function openPopup({
   speakersReachable = true,
   systemVoices = [],
   voicesArriveLate = false,
+  fetchDelayed = false,
   storedSettings = { voice: 'voicevox:2', speed: 1, volume: 100 }
 } = {}) {
   const virtualConsole = new VirtualConsole();
@@ -52,7 +53,12 @@ function openPopup({
     scripting: { insertCSS: async () => {}, executeScript: async () => {} }
   };
 
+  // エンジンが応答を返す（または失敗する）までの遅れを再現する
+  let releaseFetch = null;
   window.fetch = async () => {
+    if (fetchDelayed) {
+      await new Promise(resolve => { releaseFetch = resolve; });
+    }
     if (!speakersReachable) {
       throw new Error('failed to fetch');
     }
@@ -92,6 +98,8 @@ function openPopup({
     click: (id) => window.document.getElementById(id).dispatchEvent(new window.Event('click')),
     // 音声の一覧が遅れて届いた場面を再現する
     deliverVoices,
+    // VOICEVOX の応答（または失敗）が返ってきた場面を再現する
+    releaseFetch: () => releaseFetch && releaseFetch(),
     // content から状態通知が届いた場面を再現する。
     // fromTabId を変えると、別のタブから届いた場合を再現できる。
     notifyStatus: (state, fromTabId = 1) =>
@@ -305,6 +313,29 @@ test('エンジン未起動でポップアップを開いても、エラーは�
   assert(labels.some(l => l.includes('取得不可')),
     `取得できていないことが一覧に出ていません: ${labels.join(', ')}`);
   assert(labels.includes('Microsoft Zira'), 'OS標準の音声は選べる状態であるべきです');
+  popup.close();
+});
+
+test('VOICEVOX の応答を待たずに OS標準の音声を表示する', async () => {
+  // エンジンが起動していないと応答（失敗）まで時間がかかることがある。
+  // まとめて待つと、その間ずっと一覧が空のままになる。
+  const popup = openPopup({
+    fetchDelayed: true,
+    speakersReachable: false,
+    systemVoices: [{ voiceURI: 'Zira', name: 'Microsoft Zira - English (United States)', lang: 'en-US' }]
+  });
+  await settle();
+
+  const select = popup.doc.getElementById('speakerSelect');
+  const before = Array.from(select.options).map(o => o.textContent);
+  assert(before.includes('Microsoft Zira'),
+    `VOICEVOX の応答を待っている間、一覧が空です: ${before.join(', ') || '(なし)'}`);
+
+  popup.releaseFetch();
+  await settle();
+
+  const groups = Array.from(select.querySelectorAll('optgroup')).map(g => g.label);
+  assert(groups[0] === 'VOICEVOX', `VOICEVOX が先頭に来ていません: ${groups.join(', ')}`);
   popup.close();
 });
 
