@@ -271,6 +271,26 @@ test('OS標準の音声は言語ごとにまとまり、順序が安定する', 
   popup.close();
 });
 
+test('エンジン未起動でポップアップを開いても、エラーは出さず一覧に状態だけ示す', async () => {
+  // OS 標準の音声だけ使うこともあるので、開いただけで警告を出さない
+  const popup = openPopup({
+    speakersReachable: false,
+    systemVoices: [{ voiceURI: 'Microsoft Zira', name: 'Microsoft Zira', lang: 'en-US' }]
+  });
+  await settle();
+
+  const error = popup.doc.getElementById('errorMessage');
+  assert(error.style.display !== 'block',
+    `開いただけでエラーが出ています: ${error.textContent}`);
+
+  const labels = Array.from(popup.doc.getElementById('speakerSelect').querySelectorAll('option'))
+    .map(o => o.textContent);
+  assert(labels.some(l => l.includes('取得不可')),
+    `取得できていないことが一覧に出ていません: ${labels.join(', ')}`);
+  assert(labels.includes('Microsoft Zira'), 'OS標準の音声は選べる状態であるべきです');
+  popup.close();
+});
+
 test('話者一覧を取得できないときは話者IDを保存しない', async () => {
   // 一覧が空のまま保存すると、選択済みの話者IDを空で上書きしてしまう
   const popup = openPopup({ speakersReachable: false });

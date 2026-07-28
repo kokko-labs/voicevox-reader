@@ -58,8 +58,14 @@ async function loadSpeakers() {
     hideError();
   } catch (error) {
     speakersLoaded = false;
-    showError('VOICEVOXに接続できません。VOICEVOXが起動しているか確認してください。');
-    speakerSelect.appendChild(createVoiceOption('', 'VOICEVOX: 接続エラー'));
+
+    // ここではエラーを出さない。OS 標準の音声だけを使うこともあり、
+    // ポップアップを開いただけで警告を出すのは過剰なため。
+    // VOICEVOX の音声で再生したときに、起動確認から案内が出る。
+    const group = document.createElement('optgroup');
+    group.label = 'VOICEVOX';
+    group.appendChild(createVoiceOption('', '取得不可（エンジン未起動）'));
+    speakerSelect.appendChild(group);
   }
 
   appendSystemVoices();
