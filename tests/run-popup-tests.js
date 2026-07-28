@@ -245,29 +245,46 @@ test('音声の一覧が届き直しても選択肢が重複しない', async ()
   popup.close();
 });
 
-test('OS標準の音声は言語ごとにまとまり、順序が安定する', async () => {
-  // ブラウザが返す順は言語が入り混じる。実機で観測した並びに、地域違いを足して渡す。
+test('OS標準の音声は言語と地域ごとにまとまり、順序が安定する', async () => {
+  // 実機で観測した名前と並び。名前の末尾に言語表記が付いている。
   const popup = openPopup({
     systemVoices: [
-      { voiceURI: 'Ayumi', name: 'Microsoft Ayumi', lang: 'ja-JP' },
-      { voiceURI: 'Mark', name: 'Microsoft Mark', lang: 'en-US' },
-      { voiceURI: 'Zira', name: 'Microsoft Zira', lang: 'en-US' },
-      { voiceURI: 'Hazel', name: 'Microsoft Hazel', lang: 'en-GB' },
-      { voiceURI: 'David', name: 'Microsoft David', lang: 'en-US' },
-      { voiceURI: 'Haruka', name: 'Microsoft Haruka', lang: 'ja-JP' }
+      { voiceURI: 'Ayumi', name: 'Microsoft Ayumi - Japanese (Japan)', lang: 'ja-JP' },
+      { voiceURI: 'Mark', name: 'Microsoft Mark - English (United States)', lang: 'en-US' },
+      { voiceURI: 'Zira', name: 'Microsoft Zira - English (United States)', lang: 'en-US' },
+      { voiceURI: 'Hazel', name: 'Microsoft Hazel - English (United Kingdom)', lang: 'en-GB' },
+      { voiceURI: 'David', name: 'Microsoft David - English (United States)', lang: 'en-US' }
     ]
   });
   await settle();
 
   const groups = Array.from(popup.doc.querySelectorAll('optgroup[data-system]'));
-  assert(groups.length === 2, `言語ごとに分かれていません: ${groups.length} 組`);
-  assert(groups[0].label === 'OS 標準 (英語)', `1組目の見出しが違います: ${groups[0].label}`);
-  assert(groups[1].label === 'OS 標準 (日本語)', `2組目の見出しが違います: ${groups[1].label}`);
+  assert(groups.length === 3, `言語と地域ごとに分かれていません: ${groups.length} 組`);
+  // 見出しは言語コードそのもの。並び順と見出しが一致し、環境にも依存しない
+  assert(groups[0].label === 'OS 標準 (en-GB)', `1組目の見出しが違います: ${groups[0].label}`);
+  assert(groups[1].label === 'OS 標準 (en-US)', `2組目の見出しが違います: ${groups[1].label}`);
+  assert(groups[2].label === 'OS 標準 (ja-JP)', `3組目の見出しが違います: ${groups[2].label}`);
 
-  // en-US と en-GB は地域が違うだけなので同じ組に入る
-  const english = Array.from(groups[0].children).map(o => o.textContent);
-  assert(english.join(',') === 'Microsoft David,Microsoft Hazel,Microsoft Mark,Microsoft Zira',
-    `英語の音声が名前順にまとまっていません: ${english.join(', ')}`);
+  // 見出しに言語が出ているので、名前からは言語表記を落とす
+  const american = Array.from(groups[1].children).map(o => o.textContent);
+  assert(american.join(',') === 'Microsoft David,Microsoft Mark,Microsoft Zira',
+    `名前の整形か並び順が期待と違います: ${american.join(', ')}`);
+  popup.close();
+});
+
+test('ハイフンを含む音声名は削らない', async () => {
+  // 言語表記の除去で、名前そのものを削ってしまわないことを確かめる
+  const popup = openPopup({
+    systemVoices: [
+      { voiceURI: 'a', name: 'Google 日本語', lang: 'ja-JP' },
+      { voiceURI: 'b', name: 'Voice - Premium', lang: 'ja-JP' }
+    ]
+  });
+  await settle();
+
+  const names = Array.from(popup.doc.querySelectorAll('optgroup[data-system] option')).map(o => o.textContent);
+  assert(names.includes('Google 日本語'), `名前が変わっています: ${names.join(', ')}`);
+  assert(names.includes('Voice - Premium'), `括弧の無い名前を削っています: ${names.join(', ')}`);
   popup.close();
 });
 

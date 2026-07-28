@@ -90,43 +90,35 @@ function appendSystemVoices() {
 
   // 言語ごとにまとめる。ブラウザが OS から受け取った順は言語が入り混じるため、
   // そのままでは目的の音声を探しにくい。
-  // 地域は区別せず、en-US と en-GB は同じ「英語」の組に入れる。
   const byLanguage = new Map();
   voices.forEach(voice => {
-    const language = baseLanguage(voice.lang);
-    const group = byLanguage.get(language) || [];
+    const group = byLanguage.get(voice.lang) || [];
     group.push(voice);
-    byLanguage.set(language, group);
+    byLanguage.set(voice.lang, group);
   });
 
   // 言語は言語コード順、音声はその中で名前順。どちらも順序が毎回変わらないようにする
-  [...byLanguage.keys()].sort().forEach(language => {
+  [...byLanguage.keys()].sort().forEach(lang => {
     const group = document.createElement('optgroup');
-    group.label = `OS 標準 (${languageLabel(language)})`;
+    // 言語コードをそのまま見せる。表示名へ変換すると、言語コード順に並べているのに
+    // 見出しは訳語という状態になり、順序の根拠が読み取れなくなる。
+    group.label = `OS 標準 (${lang})`;
     group.dataset.system = 'true';
 
-    byLanguage.get(language)
+    byLanguage.get(lang)
       .slice()
       .sort((a, b) => a.name.localeCompare(b.name))
-      .forEach(voice => group.appendChild(createVoiceOption(`system:${voice.voiceURI}`, voice.name)));
+      .forEach(voice => group.appendChild(createVoiceOption(`system:${voice.voiceURI}`, voiceLabel(voice))));
 
     speakerSelect.appendChild(group);
   });
 }
 
-// 'en-US' から 'en' を取り出す
-function baseLanguage(lang) {
-  return typeof lang === 'string' && lang ? lang.split('-')[0] : '';
-}
-
-// 'en' から「英語」のような表示名を作る。
-// 変換できない環境では言語コードをそのまま見せる。
-function languageLabel(language) {
-  try {
-    return new Intl.DisplayNames(['ja'], { type: 'language' }).of(language) || language;
-  } catch (error) {
-    return language;
-  }
+// Windows の音声名は「Microsoft Zira - English (United States)」のように
+// 言語表記が付く。組の見出しに出ているので、その部分は落とす。
+// 括弧を含む末尾だけを対象にし、名前に含まれるハイフンは残す。
+function voiceLabel(voice) {
+  return voice.name.replace(/\s+-\s+[^-]*\([^)]*\)\s*$/, '');
 }
 
 // 音声の一覧が後から届いたら並べ直し、保存済みの選択を当て直す。
